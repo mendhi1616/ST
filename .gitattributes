@@ -1,0 +1,4 @@
+*.pt filter=lfs diff=lfs merge=lfs -text
+*.ilp filter=lfs diff=lfs merge=lfs -text
+models/eyes.ilp filter=lfs diff=lfs merge=lfs -text
+src/checkpoints/sam2_hiera_base_plus.pt filter=lfs diff=lfs merge=lfs -text
