@@ -1,6 +1,6 @@
 import unittest
 import pandas as pd
-from src.stats import calculate_significant_stats
+from src.stats import calculate_significant_stats, detect_outliers_zscore
 
 class TestStats(unittest.TestCase):
     def test_calculate_significant_stats(self):
@@ -32,6 +32,19 @@ class TestStats(unittest.TestCase):
         df = pd.DataFrame(data)
         results = calculate_significant_stats(df, "Value", control_group="T")
         self.assertTrue(results.empty)
+
+    def test_detect_outliers(self):
+        # Create data with one obvious outlier in Group A
+        data = {
+            "Condition": ["A"]*6,
+            "Value": [10, 10, 10, 10, 10, 100] # 100 is outlier
+        }
+        df = pd.DataFrame(data)
+
+        outliers = detect_outliers_zscore(df, "Value", threshold=2.0)
+        self.assertFalse(outliers.empty)
+        self.assertEqual(len(outliers), 1)
+        self.assertEqual(outliers.iloc[0]["Value"], 100)
 
 if __name__ == '__main__':
     unittest.main()
