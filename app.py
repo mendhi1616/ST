@@ -7,7 +7,7 @@ import sys
 # Ajout du chemin src
 sys.path.append(os.path.join(os.getcwd(), 'src'))
 from eyes_detection import analyze_tadpole_microscope
-from stats import calculate_significant_stats
+from stats import calculate_significant_stats, detect_outliers_zscore
 from report import generate_pdf_report
 
 # --- CONFIGURATION ---
@@ -21,12 +21,18 @@ if 'df_resultats' not in st.session_state:
 # --- SIDEBAR ---
 st.sidebar.header("⚙️ Paramètres")
 
-# Default path relative to the app
-default_path = os.path.join(os.getcwd(), "data", "raw", "biométrie")
-if not os.path.exists(default_path):
-    default_path = os.getcwd()
+# Default input path relative to the app
+default_input_path = os.path.join(os.getcwd(), "data", "raw", "biométrie")
+if not os.path.exists(default_input_path):
+    default_input_path = os.getcwd()
 
-dossier_input = st.sidebar.text_input("Dossier Images :", value=default_path)
+dossier_input = st.sidebar.text_input("Dossier Images (Entrée) :", value=default_input_path)
+
+# Results path (User requested specific default)
+# Note: On Linux/Mac this default won't be writable, so we handle that gracefully if it fails.
+default_results_path = r"C:\Users\User\Desktop\results\biométrie"
+dossier_output = st.sidebar.text_input("Dossier Résultats (Sortie) :", value=default_results_path)
+
 pixel_mm_ratio = st.sidebar.number_input("Calibration (mm/pixel)", value=0.0053, format="%.5f")
 st.sidebar.info("Facteur correctif pour la queue transparente (basé sur la thèse).")
 facteur_queue = st.sidebar.slider("Facteur Queue", 1.0, 4.0, 2.6, 0.1)
@@ -36,7 +42,7 @@ def run_app():
     # 1. BOUTON D'ANALYSE
     if st.sidebar.button("Lancer l'analyse 🚀", use_container_width=True):
         if not os.path.exists(dossier_input):
-            st.error(f"Dossier introuvable: {dossier_input}")
+            st.error(f"Dossier d'entrée introuvable: {dossier_input}")
             return
 
         files = []
@@ -58,18 +64,14 @@ def run_app():
             status.text(f"Analyse : {name}")
 
             parts = path.split(os.sep)
-            # Try to infer structure: .../Condition/Replica/File.jpg
             try:
-                # Assuming standard structure: root/Condition/Replica/File
-                # We need to find where the root ends.
-                # Simple heuristic: last two folders before file are Replica and Condition
                 tank = parts[-2]
                 cond = parts[-3]
             except:
                 tank, cond = "Inc", "Inc"
 
             try:
-                # Debug is False by default for batch in UI to save speed/space
+                # Debug is False by default for batch in UI
                 _, len_px, eyes_px, msg = analyze_tadpole_microscope(path, debug=False)
 
                 corps_mm = len_px * pixel_mm_ratio
@@ -91,7 +93,7 @@ def run_app():
                 res.append({
                     "Condition": cond, "Réplicat": tank, "Fichier": name,
                     "Statut": f"Erreur: {str(e)}",
-                    "Dist_Yeux_mm": 0 # Ensure column exists
+                    "Dist_Yeux_mm": 0
                 })
 
             progress.progress((i+1)/len(files))
@@ -103,25 +105,46 @@ def run_app():
     if st.session_state.df_resultats is not None:
         st.divider()
         st.header("1. Validation & Correction des Données")
+
+        # --- OUTLIER DETECTION (IMPROVEMENT IDEA) ---
+        if "Rapport" in st.session_state.df_resultats.columns:
+            outliers = detect_outliers_zscore(st.session_state.df_resultats, "Rapport", threshold=3.0)
+            if not outliers.empty:
+                st.warning(f"⚠️ **Attention :** {len(outliers)} valeurs aberrantes détectées (Z-score > 3). Vérifiez les lignes ci-dessous.")
+                st.dataframe(outliers[["Condition", "Fichier", "Rapport", "Z_Score"]].style.format({"Z_Score": "{:.2f}"}))
+            else:
+                st.success("✅ Aucune anomalie statistique majeure détectée (Z-score < 3).")
+
         st.info("Corrigez les valeurs aberrantes directement dans le tableau ci-dessous.")
 
         # TABLEAU ÉDITABLE
         df_final = st.data_editor(st.session_state.df_resultats, num_rows="dynamic", key="editor")
 
         # Filtre (exclusion des zéros pour les stats)
-        # Ensure column exists before filtering to avoid errors if empty
         if "Dist_Yeux_mm" in df_final.columns:
             df_clean = df_final[df_final["Dist_Yeux_mm"] > 0]
         else:
             df_clean = df_final
 
+        # Ensure output directory exists
+        try:
+            os.makedirs(dossier_output, exist_ok=True)
+            output_ready = True
+        except Exception as e:
+            st.error(f"Impossible de créer le dossier de sortie : {dossier_output}. ({e})")
+            output_ready = False
+
         col_export_excel, col_export_pdf = st.columns(2)
 
         with col_export_excel:
             if st.button("💾 Sauvegarder Excel Final"):
-                path_excel = os.path.join(dossier_input, "Resultats_Stage_Final.xlsx")
-                df_final.to_excel(path_excel, index=False)
-                st.success(f"Sauvegardé : {path_excel}")
+                if output_ready:
+                    path_excel = os.path.join(dossier_output, "Resultats_Stage_Final.xlsx")
+                    try:
+                        df_final.to_excel(path_excel, index=False)
+                        st.success(f"Sauvegardé : {path_excel}")
+                    except Exception as e:
+                        st.error(f"Erreur sauvegarde : {e}")
 
         # 3. DASHBOARD SCIENTIFIQUE
         if not df_clean.empty and "Condition" in df_clean.columns and "Rapport" in df_clean.columns:
@@ -140,7 +163,6 @@ def run_app():
                 st.subheader("Tests de Significativité 🧪")
                 st.markdown("Comparaison statistique par rapport au **Témoin (T)**.")
 
-                # Input for control group name, defaulting to "T" or "Témoin" if present
                 unique_conditions = df_clean["Condition"].unique()
                 default_idx = 0
                 if "T" in unique_conditions:
@@ -164,16 +186,16 @@ def run_app():
                 else:
                     st.warning("Pas assez de données pour les statistiques.")
 
-            # PDF EXPORT (Requires stats to be calculated)
+            # PDF EXPORT
             with col_export_pdf:
                 if st.button("📄 Exporter Rapport PDF"):
-                    path_pdf = os.path.join(dossier_input, "Rapport_Analyse.pdf")
-                    # Use df_stats computed above if available, else empty
-                    current_stats = df_stats if 'df_stats' in locals() else pd.DataFrame()
-                    if generate_pdf_report(df_clean, current_stats, path_pdf):
-                        st.success(f"Rapport PDF généré : {path_pdf}")
-                    else:
-                        st.error("Erreur lors de la génération du PDF.")
+                    if output_ready:
+                        path_pdf = os.path.join(dossier_output, "Rapport_Analyse.pdf")
+                        current_stats = df_stats if 'df_stats' in locals() else pd.DataFrame()
+                        if generate_pdf_report(df_clean, current_stats, path_pdf):
+                            st.success(f"Rapport PDF généré : {path_pdf}")
+                        else:
+                            st.error("Erreur lors de la génération du PDF.")
 
 if __name__ == "__main__":
     run_app()
