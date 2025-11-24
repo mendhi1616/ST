@@ -3,4 +3,5 @@ numpy
 pandas
 scikit-image
 streamlit
-openpyxl
+openpyxlfpdf
+plotly
