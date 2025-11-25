@@ -51,7 +51,6 @@ def parse_path_metadata(path: str):
     condition = "Inc"
     replicat = "Inconnu"
 
-    # On cherche le dossier 'biométrie' dans le chemin
     idx_bio = None
     for i, part in enumerate(parts):
         if part.lower() in ("biométrie", "biometrie"):
@@ -59,12 +58,10 @@ def parse_path_metadata(path: str):
             break
 
     if idx_bio is not None:
-        # On s'attend à : biométrie / <fécondation X> / <condition> / (optionnel) <T1> / image
         if idx_bio + 1 < len(parts):
-            stage = parts[idx_bio + 1]          # fécondation VI
+            stage = parts[idx_bio + 1]          
         if idx_bio + 2 < len(parts):
             condition_or_replicat = parts[idx_bio + 2]
-            # Si c'est un T1/T2..., alors on n'a pas de condition explicite
             if re.fullmatch(r"[Tt]\d+", condition_or_replicat):
                 replicat = condition_or_replicat
             else:
@@ -74,7 +71,6 @@ def parse_path_metadata(path: str):
             if re.fullmatch(r"[Tt]\d+", last):
                 replicat = last
     else:
-        # Fallback générique : on revient à un schéma simple
         if len(parts) >= 3:
             parent = parts[-2]
             grandparent = parts[-3]
@@ -108,14 +104,12 @@ def add_significance_annotations(
     if df_stats is None or df_stats.empty:
         return fig
 
-    # -- 1) Colonne condition comparée --
     condition_col = None
     for candidate in ["Condition", "Condition_Test", "Condition Cond.", "Cond", "Condition_Comparée"]:
         if candidate in df_stats.columns:
             condition_col = candidate
             break
 
-    # Si pas trouvé, on essaie de parser "Comparaison" (ex : "Témoin vs EL")
     if condition_col is None and "Comparaison" in df_stats.columns:
         def extract_condition(comp, control=control_group):
             if isinstance(comp, str) and "vs" in comp:
@@ -133,7 +127,6 @@ def add_significance_annotations(
     if condition_col is None:
         return fig
 
-    # -- 2) Colonne des étoiles --
     signif_col = None
     for candidate in ["Significativité", "Signif.", "Signif", "Significance", "Stars"]:
         if candidate in df_stats.columns:
@@ -143,7 +136,6 @@ def add_significance_annotations(
     if signif_col is None:
         return fig
 
-    # -- 3) On place les barres --
     used_offsets = 0
     for _, row in df_stats.iterrows():
         cond = row[condition_col]
@@ -167,7 +159,6 @@ def add_significance_annotations(
         x0 = control_group
         x1 = cond
 
-        # Barre horizontale
         fig.add_shape(
             type="line",
             x0=x0,
@@ -177,8 +168,8 @@ def add_significance_annotations(
             y1=y_bar,
             yref="y",
             line=dict(
-                width=3,        # plus épais
-                color="white",  # bien visible sur fond sombre
+                width=3,       
+                color="white",  
             ),
         )
 
@@ -210,7 +201,6 @@ def add_significance_annotations(
             ),
         )
 
-        # Texte des étoiles
         fig.add_annotation(
         x=x0,
         y=y_bar,
@@ -218,9 +208,9 @@ def add_significance_annotations(
         showarrow=False,
         yshift=6,
         font=dict(
-            color="white",   # étoile bien visible sur fond sombre
-            size=20,         # agrandis si tu veux encore plus (22, 24…)
-            family="Arial",  # optionnel
+            color="white",  
+            size=20,         
+            family="Arial",  
         ),
     )
 
@@ -239,24 +229,16 @@ def get_image_files(input_path: str) -> List[str]:
 def process_tadpole_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Traite une seule image de têtard et retourne un dictionnaire de résultats."""
     name = os.path.basename(path)
-
-    # Récupère: fécondation (stade), condition (EH/EL/EM/Témoin...), réplicat (T1/T2...)
     stage, cond, tank = parse_path_metadata(path)
-
-    # Normalisation du nom de condition (témoin / temoin / T -> "Témoin")
     cond_normalized = CONTROL_GROUP_ALIASES.get(cond.lower(), cond)
     stage_normalized = stage.strip()
 
     try:
-        # Analyse d'image: longueur corps + distance inter-oculaire (en pixels)
         processed_img, len_px, eyes_px, msg = analyze_tadpole_microscope(path, debug=False)
 
-        # Conversion en mm
         corps_mm = len_px * params["pixel_mm_ratio"]
         total_mm = corps_mm * params["facteur_queue"]
         eyes_mm = eyes_px * params["pixel_mm_ratio"]
-
-        # Rapport morphométrique
         ratio = (eyes_mm / total_mm) if total_mm > 0 else 0.0
 
         return {
@@ -274,7 +256,6 @@ def process_tadpole_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        # En cas de crash sur l'image, on renvoie quand même les métadonnées
         return {
             "Fécondation": stage_normalized,
             "Condition": cond_normalized,
@@ -291,18 +272,13 @@ def process_tadpole_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def process_egg_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    """Traite une seule image d'œufs et retourne un dictionnaire de résultats."""
-
     name = os.path.basename(path)
-
-    # Utilise la même logique de chemin que pour les têtards
     stage, cond, tank = parse_path_metadata(path)
 
     cond_normalized = CONTROL_GROUP_ALIASES.get(cond.lower(), cond)
     stage_normalized = stage.strip()
 
     try:
-        # Analyse spécifique œufs
         processed_img, fecondes, non_fecondes, msg = analyze_eggs(path, debug=False)
 
         total = fecondes + non_fecondes
@@ -337,7 +313,6 @@ def process_egg_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def run_analysis(files: List[str], params: Dict[str, Any]):
-    """Exécute l'analyse sur une liste de fichiers et met à jour le session state."""
     progress = st.progress(0)
     status = st.empty()
     results = []
@@ -356,9 +331,8 @@ def run_analysis(files: List[str], params: Dict[str, Any]):
     status.text("✅ Terminé !")
 
 def main():
-    """Fonction principale de l'application Streamlit."""
     st.set_page_config(page_title="Xenopus Analysis Tool", layout="wide", page_icon="🐸")
-    st.title("🐸 Xenopus Morphometric Pipeline (Version M2 Finale)")
+    st.title("🐸 Xenopus Morphometric Mendhi APP")
 
     if 'df_resultats' not in st.session_state:
         st.session_state.df_resultats = None
@@ -385,21 +359,17 @@ def main():
     if st.session_state.df_resultats is not None:
         df_final, col_export_pdf = display_results(st.session_state.df_resultats, params["dossier_output"], params["mode_analyse"])
 
-        # Le reste de l'interface (graphiques, stats, etc.) reste ici pour le moment
         if params["mode_analyse"] == "Têtards (Morphométrie)":
             df_clean = df_final[df_final["Dist_Yeux_mm"] > 0] if "Dist_Yeux_mm" in df_final.columns else df_final
             if not df_clean.empty and "Condition" in df_clean.columns and "Rapport" in df_clean.columns:
                 st.divider()
                 st.header("3. Analyse Statistique Automatisée")
-
-                # --- Sélection de la fécondation / stade ---
                 stages = ["Toutes"]
                 if "Fécondation" in df_clean.columns:
                     stages += sorted(df_clean["Fécondation"].unique())
 
                 col_graph, col_stats = st.columns([2, 1])
 
-                # Choix du stade dans la colonne de gauche
                 with col_graph:
                     st.subheader("Distribution du Rapport Morphométrique")
                     selected_stage = st.selectbox(
@@ -408,27 +378,22 @@ def main():
                         index=0,
                     )
 
-                # Filtrage en fonction du stade
                 if selected_stage != "Toutes" and "Fécondation" in df_clean.columns:
                     df_analysis = df_clean[df_clean["Fécondation"] == selected_stage].copy()
                 else:
                     df_analysis = df_clean.copy()
 
-                # Conditions disponibles
                 unique_conditions = sorted(df_analysis["Condition"].unique())
                 control_index = 0
                 if "Témoin" in unique_conditions:
                     control_index = unique_conditions.index("Témoin")
 
-                # Choix du témoin + table des stats (colonne droite)
                 with col_stats:
                     st.subheader("Tests de Significativité 🧪")
                     control_group = st.selectbox("Groupe Témoin :", unique_conditions, index=control_index)
 
-                # Calcul des stats
                 df_stats = calculate_significant_stats(df_analysis, "Rapport", control_group=control_group)
 
-                # Création du boxplot avec couleurs fixes
                 fig = px.box(
                     df_analysis,
                     x="Condition",
@@ -439,7 +404,6 @@ def main():
                     color_discrete_map=CONDITION_COLOR_MAP,
                 )
 
-                # Ajout des barres + étoiles
                 fig = add_significance_annotations(
                     fig,
                     df_analysis=df_analysis,
@@ -448,16 +412,13 @@ def main():
                     control_group=control_group,
                 )
 
-                # Affichage du graph (colonne gauche)
                 with col_graph:
                     st.plotly_chart(fig, use_container_width=True)
 
-                # Affichage du tableau de stats (colonne droite)
                 with col_stats:
                     if df_stats is not None and not df_stats.empty:
                         st.dataframe(df_stats, hide_index=True)
 
-                # Export PDF = sur le même sous-ensemble (df_analysis)
                 with col_export_pdf:
                     if st.button("📄 Exporter Rapport PDF"):
                         path_pdf = os.path.join(params["dossier_output"], "Rapport_Analyse.pdf")
@@ -472,14 +433,12 @@ def main():
                 st.divider()
                 st.header("3. Analyse Statistique Automatisée")
 
-                # --- Sélection de la fécondation / stade ---
                 stages = ["Toutes"]
                 if "Fécondation" in df_clean.columns:
                     stages += sorted(df_clean["Fécondation"].unique())
 
                 col_graph, col_stats = st.columns([2, 1])
 
-                # Choix du stade (colonne gauche)
                 with col_graph:
                     st.subheader("Distribution du Taux de Fécondation")
                     selected_stage = st.selectbox(
@@ -488,26 +447,22 @@ def main():
                         index=0,
                     )
 
-                # Filtrage par fécondation
                 if selected_stage != "Toutes" and "Fécondation" in df_clean.columns:
                     df_analysis = df_clean[df_clean["Fécondation"] == selected_stage].copy()
                 else:
                     df_analysis = df_clean.copy()
 
-                # Conditions dispo
                 unique_conditions = sorted(df_analysis["Condition"].unique())
                 control_index = 0
                 if "Témoin" in unique_conditions:
                     control_index = unique_conditions.index("Témoin")
 
-                # Choix du témoin + calcul stats (colonne droite)
                 with col_stats:
                     st.subheader("Tests de Significativité 🧪")
                     control_group = st.selectbox("Groupe Témoin :", unique_conditions, index=control_index)
 
                 df_stats = calculate_significant_stats(df_analysis, "Taux_Fecondation", control_group=control_group)
 
-                # Graph barres avec couleurs fixes
                 fig = px.bar(
                     df_analysis,
                     x="Condition",
@@ -517,7 +472,6 @@ def main():
                     color_discrete_map=CONDITION_COLOR_MAP,
                 )
 
-                # Ajout des barres + étoiles pour le taux de fécondation
                 fig = add_significance_annotations(
                     fig,
                     df_analysis=df_analysis,
@@ -526,11 +480,9 @@ def main():
                     control_group=control_group,
                 )
 
-                # Affichage graph (gauche)
                 with col_graph:
                     st.plotly_chart(fig, use_container_width=True)
 
-                # Affichage stats (droite)
                 with col_stats:
                     if df_stats is not None and not df_stats.empty:
                         st.dataframe(df_stats, hide_index=True)

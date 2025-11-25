@@ -65,7 +65,7 @@ def run_tadpole_batch(
             if not status.lower().startswith("succès"):
                 error_count += 1
             results.append(_build_row(image_path, body_px, eye_px, status, pixel_mm_ratio, tail_factor))
-        except Exception as exc:  # pragma: no cover - safety net
+        except Exception as exc:  
             error_count += 1
             log_error(logger, f"Crash on {image_path}: {exc}")
             results.append(

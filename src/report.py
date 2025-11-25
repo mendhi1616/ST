@@ -15,18 +15,13 @@ class PDFReport(FPDF):
         self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
 
 def generate_pdf_report(df_results: pd.DataFrame, df_stats: pd.DataFrame, output_path: str):
-    """
-    Generates a PDF report summarizing the results and statistics.
-    """
     pdf = PDFReport()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
 
-    # Info Header
     pdf.cell(0, 10, f"Date du rapport: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
     pdf.ln(5)
 
-    # 1. Résumé Global
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(0, 10, "1. Résumé des Données", ln=True)
     pdf.set_font("Arial", size=11)
@@ -38,12 +33,10 @@ def generate_pdf_report(df_results: pd.DataFrame, df_stats: pd.DataFrame, output
     pdf.cell(0, 8, f"Conditions détectées: {', '.join(conditions)}", ln=True)
     pdf.ln(5)
 
-    # 2. Statistiques Significatives
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(0, 10, "2. Analyse Statistique (vs Témoin)", ln=True)
 
     if not df_stats.empty:
-        # Table Header
         pdf.set_font("Arial", 'B', 10)
         col_width = 38
         headers = ["Comparaison", "Med. Temoin", "Med. Cond.", "P-value", "Signif."]
@@ -52,7 +45,6 @@ def generate_pdf_report(df_results: pd.DataFrame, df_stats: pd.DataFrame, output
             pdf.cell(col_width, 8, h, 1)
         pdf.ln()
 
-        # Table Body
         pdf.set_font("Arial", size=10)
         for _, row in df_stats.iterrows():
             pdf.cell(col_width, 8, str(row['Comparaison']), 1)
@@ -65,7 +57,6 @@ def generate_pdf_report(df_results: pd.DataFrame, df_stats: pd.DataFrame, output
         pdf.set_font("Arial", 'I', 11)
         pdf.cell(0, 10, "Aucune statistique significative calculée ou pas de groupe témoin.", ln=True)
 
-    # 3. Détail par Condition (Summary)
     pdf.ln(10)
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(0, 10, "3. Moyennes par Condition", ln=True)
