@@ -32,16 +32,16 @@ def process_dataset_batch(root_folder, output_folder=None):
             if file.lower().endswith(('.jpg', '.jpeg', '.png', '.tif')):
                 full_path = os.path.join(root, file)
                 files_processed += 1
-
-                # --- 1. MÉTADONNÉES (CONDITION / TANK) ---
+                
                 parts = full_path.split(os.sep)
                 try:
-                    replicat = parts[-2]  # Ex: T1
-                    condition = parts[-3] # Ex: EH
+                    replicat = parts[-2]          # T1
+                    condition = parts[-3]         # EH / EL / témoin
+                    stage = parts[-4]             # fécondation I, VI, ...
                 except:
                     replicat = "Inconnu"
                     condition = "Inconnu"
-
+                    stage = "Inconnu"
                 print(f"[{files_processed}] Traitement de {file}...", end="")
 
                 # --- 2. ANALYSE D'IMAGE (Moteur V5.1) ---
