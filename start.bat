@@ -9,7 +9,7 @@ echo Lancement de l'interface d'analyse en cours...
 echo Veuillez patienter, une page web va s'ouvrir.
 echo.
 
-streamlit run app.py
+streamlit run src/app.py
 
 if %errorlevel% neq 0 (
     echo.
