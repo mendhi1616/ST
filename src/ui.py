@@ -64,13 +64,13 @@ def setup_sidebar():
 
     return params
 
-def display_results(df_final, dossier_output):
+def display_results(df_final, dossier_output, mode_analyse):
     """Affiche l'interface des résultats, y compris les outliers, le tableau éditable et les options d'export."""
     st.divider()
     st.header("1. Validation & Correction des Données")
 
     # Détection des outliers
-    if "Rapport" in df_final.columns:
+    if mode_analyse == "Têtards (Morphométrie)" and "Rapport" in df_final.columns:
         from stats import detect_outliers_zscore
         outliers = detect_outliers_zscore(df_final, "Rapport", threshold=3.0)
         if not outliers.empty:
