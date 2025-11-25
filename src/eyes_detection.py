@@ -4,25 +4,7 @@ import math
 import os
 import sys
 from typing import Tuple, Optional, List, Dict, Any
-
-def read_image(path: str) -> Optional[np.ndarray]:
-    """
-    Reads an image from a path, handling special characters if necessary.
-    Uses generic cv2.imread for simplicity, falling back to numpy fromfile if needed.
-    """
-    try:
-        # First try standard cv2.imread
-        img = cv2.imread(path)
-        if img is not None:
-            return img
-
-        # Fallback for Windows paths with special chars
-        stream = np.fromfile(path, dtype=np.uint8)
-        img = cv2.imdecode(stream, cv2.IMREAD_COLOR)
-        return img
-    except Exception as e:
-        # print(f"Error reading image {path}: {e}")
-        return None
+from .utils import read_image_with_unicode
 
 def analyze_tadpole_microscope(image_path: str, debug: bool = False, output_dir: Optional[str] = None) -> Tuple[Optional[np.ndarray], float, float, str]:
     """
@@ -48,7 +30,7 @@ def analyze_tadpole_microscope(image_path: str, debug: bool = False, output_dir:
     if not os.path.exists(image_path):
         return None, 0.0, 0.0, "Fichier introuvable"
 
-    img = read_image(image_path)
+    img = read_image_with_unicode(image_path)
     if img is None:
         return None, 0.0, 0.0, "Image illisible"
 
