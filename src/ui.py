@@ -5,15 +5,12 @@ import pandas as pd
 def setup_sidebar():
     """Configure la barre latérale avec tous les paramètres de l'application."""
     st.sidebar.header("⚙️ Paramètres")
-
-    # Mode d'analyse
     st.sidebar.header("Mode d'Analyse")
     mode_analyse = st.sidebar.radio(
         "Que voulez-vous analyser ?",
         ["Têtards (Morphométrie)", "Œufs (Fécondation)"]
     )
 
-    # Chemins des dossiers
     default_input_path = os.path.join(os.getcwd(), "data", "raw", "biométrie")
     if not os.path.exists(default_input_path):
         default_input_path = os.getcwd()
@@ -31,7 +28,6 @@ def setup_sidebar():
         help="Chemin où les rapports (Excel, PDF) seront sauvegardés."
     )
 
-    # Upload de fichier unique
     st.sidebar.divider()
     st.sidebar.header("Analyse d'un Fichier Unique")
     uploaded_file = st.sidebar.file_uploader(
@@ -39,7 +35,6 @@ def setup_sidebar():
         type=['.jpg', '.png', '.jpeg']
     )
 
-    # Paramètres scientifiques
     st.sidebar.divider()
     st.sidebar.header("Paramètres Scientifiques")
     pixel_mm_ratio = st.sidebar.number_input(
@@ -65,11 +60,9 @@ def setup_sidebar():
     return params
 
 def display_results(df_final, dossier_output, mode_analyse):
-    """Affiche l'interface des résultats, y compris les outliers, le tableau éditable et les options d'export."""
     st.divider()
     st.header("1. Validation & Correction des Données")
 
-    # Détection des outliers
     if mode_analyse == "Têtards (Morphométrie)" and "Rapport" in df_final.columns:
         from stats import detect_outliers_zscore
         outliers = detect_outliers_zscore(df_final, "Rapport", threshold=3.0)
@@ -81,7 +74,6 @@ def display_results(df_final, dossier_output, mode_analyse):
 
     st.info("💡 Corrigez les valeurs si nécessaire directement dans le tableau ci-dessous.")
 
-    # Séparer les données éditables de l'image
     if "Image_Annotée" in df_final.columns:
         df_images = df_final[["Fichier", "Image_Annotée"]].copy()
         df_editable = df_final.drop(columns=["Image_Annotée"])
@@ -89,13 +81,9 @@ def display_results(df_final, dossier_output, mode_analyse):
         df_images = pd.DataFrame(columns=["Fichier", "Image_Annotée"])
         df_editable = df_final
 
-    # Tableau éditable
     df_edited_data = st.data_editor(df_editable, num_rows="dynamic", key="editor")
-
-    # Fusionner les données éditées avec les images
     df_edited = pd.merge(df_edited_data, df_images, on="Fichier", how="left")
 
-    # Export
     col_export_excel, col_export_pdf = st.columns(2)
     output_ready = setup_output_directory(dossier_output)
 

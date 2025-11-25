@@ -2,15 +2,11 @@ import os
 import pandas as pd
 import sys
 
-# On s'assure que Python trouve le fichier eyes_detection.py qui est dans le même dossier
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 
 from eyes_detection import analyze_tadpole_microscope
 
-# ==========================================
-# CONFIGURATION SCIENTIFIQUE
-# ==========================================
 PIXEL_TO_MM = 0.0053
 FACTEUR_QUEUE = 2.6
 
@@ -26,29 +22,25 @@ def process_dataset_batch(root_folder, output_folder=None):
     data = []
     files_processed = 0
 
-    # Parcours récursif des dossiers
     for root, dirs, files in os.walk(root_folder):
         for file in files:
             if file.lower().endswith(('.jpg', '.jpeg', '.png', '.tif')):
                 full_path = os.path.join(root, file)
                 files_processed += 1
-                
+
                 parts = full_path.split(os.sep)
                 try:
-                    replicat = parts[-2]          # T1
-                    condition = parts[-3]         # EH / EL / témoin
-                    stage = parts[-4]             # fécondation I, VI, ...
+                    replicat = parts[-2]     
+                    condition = parts[-3]        
+                    stage = parts[-4]             
                 except:
                     replicat = "Inconnu"
                     condition = "Inconnu"
                     stage = "Inconnu"
                 print(f"[{files_processed}] Traitement de {file}...", end="")
 
-                # --- 2. ANALYSE D'IMAGE (Moteur V5.1) ---
                 try:
                     _, len_px_corps, eyes_px, status = analyze_tadpole_microscope(full_path, debug=False)
-
-                    # --- 3. CALCULS BIOLOGIQUES ---
                     corps_mm = len_px_corps * PIXEL_TO_MM
                     total_mm_estime = corps_mm * FACTEUR_QUEUE
                     eyes_mm = eyes_px * PIXEL_TO_MM
@@ -79,7 +71,6 @@ def process_dataset_batch(root_folder, output_folder=None):
                     print(f" ERREUR: {e}")
                     data.append({"Fichier": file, "Statut Algo": f"Crash: {e}"})
 
-    # --- 4. EXPORT EXCEL ---
     if data:
         if not output_folder:
             base_dir = os.path.dirname(os.path.dirname(root_folder))
