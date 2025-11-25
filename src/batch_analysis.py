@@ -1,12 +1,7 @@
 import os
 import pandas as pd
-import sys
 
-# On s'assure que Python trouve le fichier eyes_detection.py qui est dans le même dossier
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(current_dir)
-
-from eyes_detection import analyze_tadpole_microscope
+from .eyes_detection import analyze_tadpole_microscope
 
 # ==========================================
 # CONFIGURATION SCIENTIFIQUE
