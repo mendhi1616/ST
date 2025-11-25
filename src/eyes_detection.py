@@ -6,9 +6,16 @@ from typing import Tuple, Optional
 
 
 def read_image(path: str) -> Optional[np.ndarray]:
-    """Minimal image reader using OpenCV."""
+    """Minimal image reader using OpenCV with Unicode-safe fallback."""
     try:
-        return cv2.imread(path)
+        img = cv2.imread(path)
+        if img is not None:
+            return img
+
+        # Windows paths containing accents can fail with imread; fall back to imdecode
+        # on raw bytes to handle extended characters gracefully.
+        data = np.fromfile(path, dtype=np.uint8)
+        return cv2.imdecode(data, cv2.IMREAD_COLOR)
     except Exception:
         return None
 
