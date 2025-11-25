@@ -12,12 +12,220 @@ from stats import calculate_significant_stats
 from report import generate_pdf_report
 from ui import setup_sidebar, display_results
 
+# Palette de couleurs fixe pour les conditions
+CONDITION_COLOR_MAP = {
+    "EH": "#1f77b4",
+    "EL": "#ff7f0e",
+    "EM": "#2ca02c",
+    "Témoin": "#d62728",
+    "temoin": "#d62728",
+    "T": "#d62728",
+}
+
 # --- CONSTANTES ---
 CONTROL_GROUP_ALIASES = {
     "temoin": "Témoin",
     "témoin": "Témoin",
     "t": "Témoin"
 }
+
+import re
+from pathlib import Path
+
+import re
+from pathlib import Path
+
+def parse_path_metadata(path: str):
+    """
+    Déduit (stage, condition, replicat) à partir du chemin.
+
+    Gère :
+    - .../biométrie/fécondation VI/EL/T1/image.jpg
+    - .../biométrie/fécondation VI/EL/image.jpg
+    - et évite de renvoyer 'biométrie' comme stade.
+    """
+    p = Path(path)
+    parts = list(p.parts)
+
+    stage = "Inconnu"
+    condition = "Inc"
+    replicat = "Inconnu"
+
+    # On cherche le dossier 'biométrie' dans le chemin
+    idx_bio = None
+    for i, part in enumerate(parts):
+        if part.lower() in ("biométrie", "biometrie"):
+            idx_bio = i
+            break
+
+    if idx_bio is not None:
+        # On s'attend à : biométrie / <fécondation X> / <condition> / (optionnel) <T1> / image
+        if idx_bio + 1 < len(parts):
+            stage = parts[idx_bio + 1]          # fécondation VI
+        if idx_bio + 2 < len(parts):
+            condition_or_replicat = parts[idx_bio + 2]
+            # Si c'est un T1/T2..., alors on n'a pas de condition explicite
+            if re.fullmatch(r"[Tt]\d+", condition_or_replicat):
+                replicat = condition_or_replicat
+            else:
+                condition = condition_or_replicat
+        if idx_bio + 3 < len(parts):
+            last = parts[idx_bio + 3]
+            if re.fullmatch(r"[Tt]\d+", last):
+                replicat = last
+    else:
+        # Fallback générique : on revient à un schéma simple
+        if len(parts) >= 3:
+            parent = parts[-2]
+            grandparent = parts[-3]
+            ggparent = parts[-4] if len(parts) >= 4 else "Inconnu"
+
+            if re.fullmatch(r"[Tt]\d+", parent):
+                replicat = parent
+                condition = grandparent
+                stage = ggparent
+            else:
+                condition = parent
+                stage = grandparent
+
+    return stage, condition, replicat
+
+
+
+def add_significance_annotations(
+    fig,
+    df_analysis: pd.DataFrame,
+    df_stats: pd.DataFrame,
+    measure_col: str,
+    control_group: str,
+):
+    """
+    Ajoute des barres + étoiles de significativité sur un graphique Plotly
+    à partir de df_stats (résultat de calculate_significant_stats).
+    On suppose que chaque ligne correspond à "control_group vs autre condition".
+    """
+
+    if df_stats is None or df_stats.empty:
+        return fig
+
+    # -- 1) Colonne condition comparée --
+    condition_col = None
+    for candidate in ["Condition", "Condition_Test", "Condition Cond.", "Cond", "Condition_Comparée"]:
+        if candidate in df_stats.columns:
+            condition_col = candidate
+            break
+
+    # Si pas trouvé, on essaie de parser "Comparaison" (ex : "Témoin vs EL")
+    if condition_col is None and "Comparaison" in df_stats.columns:
+        def extract_condition(comp, control=control_group):
+            if isinstance(comp, str) and "vs" in comp:
+                a, b = [c.strip() for c in comp.split("vs")]
+                if a == control:
+                    return b
+                elif b == control:
+                    return a
+            return None
+
+        df_stats = df_stats.copy()
+        df_stats["Condition"] = df_stats["Comparaison"].apply(extract_condition)
+        condition_col = "Condition"
+
+    if condition_col is None:
+        return fig
+
+    # -- 2) Colonne des étoiles --
+    signif_col = None
+    for candidate in ["Significativité", "Signif.", "Signif", "Significance", "Stars"]:
+        if candidate in df_stats.columns:
+            signif_col = candidate
+            break
+
+    if signif_col is None:
+        return fig
+
+    # -- 3) On place les barres --
+    used_offsets = 0
+    for _, row in df_stats.iterrows():
+        cond = row[condition_col]
+        stars = row[signif_col]
+
+        if cond is None or pd.isna(cond):
+            continue
+        if isinstance(stars, str) and stars.lower() == "ns":
+            continue
+
+        y_control = df_analysis[df_analysis["Condition"] == control_group][measure_col]
+        y_cond = df_analysis[df_analysis["Condition"] == cond][measure_col]
+
+        if y_control.empty or y_cond.empty:
+            continue
+
+        y_max = max(y_control.max(), y_cond.max())
+        y_bar = y_max * (1.05 + 0.08 * used_offsets)
+        used_offsets += 1
+
+        x0 = control_group
+        x1 = cond
+
+        # Barre horizontale
+        fig.add_shape(
+            type="line",
+            x0=x0,
+            x1=x1,
+            xref="x",
+            y0=y_bar,
+            y1=y_bar,
+            yref="y",
+            line=dict(
+                width=3,        # plus épais
+                color="white",  # bien visible sur fond sombre
+            ),
+        )
+
+        fig.add_shape(
+            type="line",
+            x0=x0,
+            x1=x0,
+            xref="x",
+            y0=y_bar,
+            y1=y_bar * 0.995,
+            yref="y",
+            line=dict(
+                width=3,
+                color="white",
+            ),
+        )
+
+        fig.add_shape(
+            type="line",
+            x0=x1,
+            x1=x1,
+            xref="x",
+            y0=y_bar,
+            y1=y_bar * 0.995,
+            yref="y",
+            line=dict(
+                width=3,
+                color="white",
+            ),
+        )
+
+        # Texte des étoiles
+        fig.add_annotation(
+        x=x0,
+        y=y_bar,
+        text=str(stars),
+        showarrow=False,
+        yshift=6,
+        font=dict(
+            color="white",   # étoile bien visible sur fond sombre
+            size=20,         # agrandis si tu veux encore plus (22, 24…)
+            family="Arial",  # optionnel
+        ),
+    )
+
+    return fig
+
 
 def get_image_files(input_path: str) -> List[str]:
     """Récupère la liste des chemins de fichiers image à partir d'un dossier."""
@@ -32,65 +240,101 @@ def process_tadpole_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Traite une seule image de têtard et retourne un dictionnaire de résultats."""
     name = os.path.basename(path)
 
-    parts = path.split(os.sep)
-    try:
-        tank = parts[-2]
-        cond = parts[-3]
-    except IndexError:
-        tank, cond = "Inc", "Inc"
+    # Récupère: fécondation (stade), condition (EH/EL/EM/Témoin...), réplicat (T1/T2...)
+    stage, cond, tank = parse_path_metadata(path)
 
+    # Normalisation du nom de condition (témoin / temoin / T -> "Témoin")
     cond_normalized = CONTROL_GROUP_ALIASES.get(cond.lower(), cond)
+    stage_normalized = stage.strip()
 
     try:
+        # Analyse d'image: longueur corps + distance inter-oculaire (en pixels)
         processed_img, len_px, eyes_px, msg = analyze_tadpole_microscope(path, debug=False)
 
+        # Conversion en mm
         corps_mm = len_px * params["pixel_mm_ratio"]
         total_mm = corps_mm * params["facteur_queue"]
         eyes_mm = eyes_px * params["pixel_mm_ratio"]
-        ratio = (eyes_mm / total_mm) if total_mm > 0 else 0
+
+        # Rapport morphométrique
+        ratio = (eyes_mm / total_mm) if total_mm > 0 else 0.0
 
         return {
-            "Condition": cond_normalized, "Réplicat": tank, "Fichier": name,
-            "Corps_mm": round(corps_mm, 3), "Total_Estimé_mm": round(total_mm, 3),
-            "Dist_Yeux_mm": round(eyes_mm, 3), "Rapport": round(ratio, 4),
-            "Statut": msg, "Chemin_Complet": path, "Image_Annotée": processed_img
+            "Fécondation": stage_normalized,
+            "Condition": cond_normalized,
+            "Réplicat": tank,
+            "Fichier": name,
+            "Corps_mm": round(corps_mm, 3),
+            "Total_Estimé_mm": round(total_mm, 3),
+            "Dist_Yeux_mm": round(eyes_mm, 3),
+            "Rapport": round(ratio, 4),
+            "Statut": msg,
+            "Chemin_Complet": path,
+            "Image_Annotée": processed_img,
         }
+
     except Exception as e:
+        # En cas de crash sur l'image, on renvoie quand même les métadonnées
         return {
-            "Condition": cond_normalized, "Réplicat": tank, "Fichier": name,
-            "Statut": f"Erreur: {str(e)}", "Dist_Yeux_mm": 0, "Image_Annotée": None
+            "Fécondation": stage_normalized,
+            "Condition": cond_normalized,
+            "Réplicat": tank,
+            "Fichier": name,
+            "Corps_mm": 0.0,
+            "Total_Estimé_mm": 0.0,
+            "Dist_Yeux_mm": 0.0,
+            "Rapport": 0.0,
+            "Statut": f"Erreur: {str(e)}",
+            "Chemin_Complet": path,
+            "Image_Annotée": None,
         }
+
 
 def process_egg_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    """Traite une seule image d'œuf et retourne un dictionnaire de résultats."""
+    """Traite une seule image d'œufs et retourne un dictionnaire de résultats."""
+
     name = os.path.basename(path)
 
-    parts = path.split(os.sep)
-    try:
-        tank = parts[-2]
-        cond = parts[-3]
-    except IndexError:
-        tank, cond = "Inc", "Inc"
+    # Utilise la même logique de chemin que pour les têtards
+    stage, cond, tank = parse_path_metadata(path)
 
     cond_normalized = CONTROL_GROUP_ALIASES.get(cond.lower(), cond)
+    stage_normalized = stage.strip()
 
     try:
+        # Analyse spécifique œufs
         processed_img, fecondes, non_fecondes, msg = analyze_eggs(path, debug=False)
 
         total = fecondes + non_fecondes
-        fertilization_rate = (fecondes / total) * 100 if total > 0 else 0
+        fertilization_rate = (fecondes / total) * 100 if total > 0 else 0.0
 
         return {
-            "Condition": cond_normalized, "Réplicat": tank, "Fichier": name,
-            "Oeufs_Fecondes": fecondes, "Oeufs_Non_Fecondes": non_fecondes,
+            "Fécondation": stage_normalized,
+            "Condition": cond_normalized,
+            "Réplicat": tank,
+            "Fichier": name,
+            "Oeufs_Fecondes": fecondes,
+            "Oeufs_Non_Fecondes": non_fecondes,
             "Taux_Fecondation": round(fertilization_rate, 2),
-            "Statut": msg, "Chemin_Complet": path, "Image_Annotée": processed_img
+            "Statut": msg,
+            "Chemin_Complet": path,
+            "Image_Annotée": processed_img,
         }
+
     except Exception as e:
         return {
-            "Condition": cond_normalized, "Réplicat": tank, "Fichier": name,
-            "Statut": f"Erreur: {str(e)}", "Oeufs_Fecondes": 0, "Image_Annotée": None
+            "Fécondation": stage_normalized,
+            "Condition": cond_normalized,
+            "Réplicat": tank,
+            "Fichier": name,
+            "Oeufs_Fecondes": 0,
+            "Oeufs_Non_Fecondes": 0,
+            "Taux_Fecondation": 0.0,
+            "Statut": f"Erreur: {str(e)}",
+            "Chemin_Complet": path,
+            "Image_Annotée": None,
         }
+
 
 def run_analysis(files: List[str], params: Dict[str, Any]):
     """Exécute l'analyse sur une liste de fichiers et met à jour le session state."""
@@ -148,31 +392,76 @@ def main():
                 st.divider()
                 st.header("3. Analyse Statistique Automatisée")
 
+                # --- Sélection de la fécondation / stade ---
+                stages = ["Toutes"]
+                if "Fécondation" in df_clean.columns:
+                    stages += sorted(df_clean["Fécondation"].unique())
+
                 col_graph, col_stats = st.columns([2, 1])
 
+                # Choix du stade dans la colonne de gauche
                 with col_graph:
                     st.subheader("Distribution du Rapport Morphométrique")
-                    fig = px.box(df_clean, x="Condition", y="Rapport", color="Condition", points="all", title="Comparaison Témoin vs Polluants")
-                    st.plotly_chart(fig, use_container_width=True)
+                    selected_stage = st.selectbox(
+                        "Fécondation / Stade analysé :",
+                        stages,
+                        index=0,
+                    )
 
+                # Filtrage en fonction du stade
+                if selected_stage != "Toutes" and "Fécondation" in df_clean.columns:
+                    df_analysis = df_clean[df_clean["Fécondation"] == selected_stage].copy()
+                else:
+                    df_analysis = df_clean.copy()
+
+                # Conditions disponibles
+                unique_conditions = sorted(df_analysis["Condition"].unique())
+                control_index = 0
+                if "Témoin" in unique_conditions:
+                    control_index = unique_conditions.index("Témoin")
+
+                # Choix du témoin + table des stats (colonne droite)
                 with col_stats:
                     st.subheader("Tests de Significativité 🧪")
-                    unique_conditions = sorted(df_clean["Condition"].unique())
-
-                    control_index = 0
-                    if "Témoin" in unique_conditions:
-                        control_index = unique_conditions.index("Témoin")
-
                     control_group = st.selectbox("Groupe Témoin :", unique_conditions, index=control_index)
 
-                    df_stats = calculate_significant_stats(df_clean, "Rapport", control_group=control_group)
-                    if not df_stats.empty:
+                # Calcul des stats
+                df_stats = calculate_significant_stats(df_analysis, "Rapport", control_group=control_group)
+
+                # Création du boxplot avec couleurs fixes
+                fig = px.box(
+                    df_analysis,
+                    x="Condition",
+                    y="Rapport",
+                    color="Condition",
+                    points="all",
+                    title="Comparaison Témoin vs Polluants",
+                    color_discrete_map=CONDITION_COLOR_MAP,
+                )
+
+                # Ajout des barres + étoiles
+                fig = add_significance_annotations(
+                    fig,
+                    df_analysis=df_analysis,
+                    df_stats=df_stats,
+                    measure_col="Rapport",
+                    control_group=control_group,
+                )
+
+                # Affichage du graph (colonne gauche)
+                with col_graph:
+                    st.plotly_chart(fig, use_container_width=True)
+
+                # Affichage du tableau de stats (colonne droite)
+                with col_stats:
+                    if df_stats is not None and not df_stats.empty:
                         st.dataframe(df_stats, hide_index=True)
 
+                # Export PDF = sur le même sous-ensemble (df_analysis)
                 with col_export_pdf:
                     if st.button("📄 Exporter Rapport PDF"):
                         path_pdf = os.path.join(params["dossier_output"], "Rapport_Analyse.pdf")
-                        if generate_pdf_report(df_clean, df_stats, path_pdf):
+                        if generate_pdf_report(df_analysis, df_stats, path_pdf):
                             st.success(f"Rapport PDF généré : {path_pdf}")
                         else:
                             st.error("Erreur lors de la génération du PDF.")
@@ -183,27 +472,70 @@ def main():
                 st.divider()
                 st.header("3. Analyse Statistique Automatisée")
 
+                # --- Sélection de la fécondation / stade ---
+                stages = ["Toutes"]
+                if "Fécondation" in df_clean.columns:
+                    stages += sorted(df_clean["Fécondation"].unique())
+
                 col_graph, col_stats = st.columns([2, 1])
 
+                # Choix du stade (colonne gauche)
                 with col_graph:
                     st.subheader("Distribution du Taux de Fécondation")
-                    fig = px.bar(df_clean, x="Condition", y="Taux_Fecondation", color="Condition", title="Comparaison du Taux de Fécondation")
-                    st.plotly_chart(fig, use_container_width=True)
+                    selected_stage = st.selectbox(
+                        "Fécondation / Stade analysé :",
+                        stages,
+                        index=0,
+                    )
 
+                # Filtrage par fécondation
+                if selected_stage != "Toutes" and "Fécondation" in df_clean.columns:
+                    df_analysis = df_clean[df_clean["Fécondation"] == selected_stage].copy()
+                else:
+                    df_analysis = df_clean.copy()
+
+                # Conditions dispo
+                unique_conditions = sorted(df_analysis["Condition"].unique())
+                control_index = 0
+                if "Témoin" in unique_conditions:
+                    control_index = unique_conditions.index("Témoin")
+
+                # Choix du témoin + calcul stats (colonne droite)
                 with col_stats:
                     st.subheader("Tests de Significativité 🧪")
-                    unique_conditions = sorted(df_clean["Condition"].unique())
-
-                    control_index = 0
-                    if "Témoin" in unique_conditions:
-                        control_index = unique_conditions.index("Témoin")
-
                     control_group = st.selectbox("Groupe Témoin :", unique_conditions, index=control_index)
 
-                    df_stats = calculate_significant_stats(df_clean, "Taux_Fecondation", control_group=control_group)
-                    if not df_stats.empty:
+                df_stats = calculate_significant_stats(df_analysis, "Taux_Fecondation", control_group=control_group)
+
+                # Graph barres avec couleurs fixes
+                fig = px.bar(
+                    df_analysis,
+                    x="Condition",
+                    y="Taux_Fecondation",
+                    color="Condition",
+                    title="Comparaison du Taux de Fécondation",
+                    color_discrete_map=CONDITION_COLOR_MAP,
+                )
+
+                # Ajout des barres + étoiles pour le taux de fécondation
+                fig = add_significance_annotations(
+                    fig,
+                    df_analysis=df_analysis,
+                    df_stats=df_stats,
+                    measure_col="Taux_Fecondation",
+                    control_group=control_group,
+                )
+
+                # Affichage graph (gauche)
+                with col_graph:
+                    st.plotly_chart(fig, use_container_width=True)
+
+                # Affichage stats (droite)
+                with col_stats:
+                    if df_stats is not None and not df_stats.empty:
                         st.dataframe(df_stats, hide_index=True)
 
 
+    
 if __name__ == "__main__":
     main()
