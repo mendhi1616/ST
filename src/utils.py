@@ -23,16 +23,8 @@ def ensure_directory(path: str) -> str:
 
 
 def write_machine_friendly_csv(df: pd.DataFrame, path: str) -> None:
-    """Write a predictable CSV even with the lightweight pandas stub."""
-    if hasattr(df, "to_csv"):
-        df.to_csv(path, index=False)
-    else:
-        headers = list(df.columns.keys())
-        with open(path, "w") as f:
-            f.write(",".join(headers) + "\n")
-            for i in range(len(df)):
-                row = [str(df.columns[h][i]) if i < len(df.columns[h]) else "" for h in headers]
-                f.write(",".join(row) + "\n")
+    """Write a predictable CSV with standard pandas."""
+    df.to_csv(path, index=False)
 
 
 def write_metadata(metadata: Dict, path: str) -> None:

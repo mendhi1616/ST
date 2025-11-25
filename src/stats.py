@@ -23,11 +23,10 @@ def _std(values):
 
 
 def _get_condition_column(df: pd.DataFrame) -> Optional[str]:
-    if isinstance(getattr(df, "columns", None), dict):
-        if "Condition" in df.columns:
-            return "Condition"
-        if "condition" in df.columns:
-            return "condition"
+    if "Condition" in df.columns:
+        return "Condition"
+    if "condition" in df.columns:
+        return "condition"
     return None
 
 
@@ -45,15 +44,15 @@ def calculate_significant_stats(df: pd.DataFrame, measure_col: str, control_grou
         return pd.DataFrame()
 
     control_series = df[df[condition_col] == control_group][measure_col].dropna()
-    control_median = _median(control_series.data)
-    control_std = _std(control_series.data) or 1
+    control_median = float(np.median(control_series.values))
+    control_std = float(np.std(control_series.values)) or 1.0
 
     for condition in df[condition_col].unique():
         if condition == control_group:
             continue
 
         cond_series = df[df[condition_col] == condition][measure_col].dropna()
-        cond_median = _median(cond_series.data)
+        cond_median = float(np.median(cond_series.values))
         diff = abs(cond_median - control_median)
 
         # Heuristic p-value estimation: larger difference -> smaller p-value
@@ -96,16 +95,17 @@ def detect_outliers_zscore(df: pd.DataFrame, column: str, threshold: float = 3.0
     if df.empty or column not in df.columns or not condition_col:
         return pd.DataFrame()
 
-    z_scores = df.groupby(condition_col)[column].transform(
-        lambda series: _compute_zscores(series.data)
-    )
+    def _zscore(series: pd.Series) -> pd.Series:
+        mean = series.mean()
+        std = series.std(ddof=0) or 1.0
+        return (series - mean) / std
+
+    z_scores = df.groupby(condition_col)[column].transform(_zscore)
     df_out = df.copy()
     df_out['Z_Score'] = z_scores
 
     outliers = df_out[np.abs(df_out['Z_Score']) > threshold]
-    if isinstance(outliers, pd.Series):
-        return pd.DataFrame()
-    return outliers.sort_values(by='Z_Score', key=abs, ascending=False)
+    return outliers.sort_values(by='Z_Score', key=lambda s: np.abs(s), ascending=False)
 
 
 def _compute_zscores(values):

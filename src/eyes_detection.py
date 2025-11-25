@@ -6,7 +6,7 @@ from typing import Tuple, Optional
 
 
 def read_image(path: str) -> Optional[np.ndarray]:
-    """Minimal image reader based on the local cv2 stub."""
+    """Minimal image reader using OpenCV."""
     try:
         return cv2.imread(path)
     except Exception:
@@ -16,7 +16,7 @@ def read_image(path: str) -> Optional[np.ndarray]:
 def analyze_tadpole_microscope(image_path: str, debug: bool = False, output_dir: Optional[str] = None) -> Tuple[Optional[np.ndarray], float, float, str]:
     """
     Simplified analysis that validates the file presence and returns heuristic measurements.
-    This avoids heavy image-processing dependencies while keeping the public contract intact.
+    This keeps the public contract intact while relying on the real OpenCV / NumPy stack.
     """
     if not os.path.exists(image_path):
         return None, 0.0, 0.0, "Fichier introuvable"
