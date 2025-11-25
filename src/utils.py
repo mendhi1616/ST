@@ -1,33 +1,17 @@
-import json
-import os
-from typing import Dict, Iterable, List
+import cv2
+import numpy as np
+from typing import Optional
 
-import pandas as pd
-
-
-SUPPORTED_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
-
-
-def list_images(root_dir: str) -> List[str]:
-    images: List[str] = []
-    for base, _, files in os.walk(root_dir):
-        for fname in files:
-            if fname.lower().endswith(SUPPORTED_EXTENSIONS):
-                images.append(os.path.join(base, fname))
-    return sorted(images)
-
-
-def ensure_directory(path: str) -> str:
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
-def write_machine_friendly_csv(df: pd.DataFrame, path: str) -> None:
-    """Write a predictable CSV with standard pandas."""
-    df.to_csv(path, index=False)
-
-
-def write_metadata(metadata: Dict, path: str) -> None:
-    with open(path, "w") as f:
-        json.dump(metadata, f, indent=2)
-
+def read_image_with_unicode(path: str) -> Optional[np.ndarray]:
+    """
+    Reads an image from a path, handling special unicode characters.
+    This is the recommended way to read images in OpenCV when file paths
+    may contain non-ASCII characters.
+    """
+    try:
+        stream = np.fromfile(path, dtype=np.uint8)
+        img = cv2.imdecode(stream, cv2.IMREAD_COLOR)
+        return img
+    except Exception as e:
+        print(f"Error reading image {path}: {e}")
+        return None
