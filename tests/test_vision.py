@@ -4,8 +4,13 @@ import cv2
 import os
 import tempfile
 import shutil
-from src.eyes_detection import analyze_tadpole_microscope
-from src.utils import read_image_with_unicode
+import sys
+
+# Add src to path to allow absolute imports
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
+
+from eyes_detection import analyze_tadpole_microscope
+from utils import read_image_with_unicode
 
 class TestVision(unittest.TestCase):
     def setUp(self):
