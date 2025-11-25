@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import os
-from .utils import read_image_with_unicode
+from utils import read_image_with_unicode
 
 def analyze_eggs(image_path, debug=False):
     if not os.path.exists(image_path):
