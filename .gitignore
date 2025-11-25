@@ -5,3 +5,6 @@ __pycache__/
 *.xlsx
 data/results/
 debug_output/
+results/resultats_codex.csv
+results/metadata.json
+results/log.txt
