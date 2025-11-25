@@ -4,7 +4,7 @@ import math
 import os
 import sys
 from typing import Tuple, Optional, List, Dict, Any
-from .utils import read_image_with_unicode
+from utils import read_image_with_unicode
 
 def analyze_tadpole_microscope(image_path: str, debug: bool = False, output_dir: Optional[str] = None) -> Tuple[Optional[np.ndarray], float, float, str]:
     """
