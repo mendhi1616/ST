@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import pandas as pd
 
 def setup_sidebar():
     """Configure la barre latérale avec tous les paramètres de l'application."""
@@ -80,8 +81,19 @@ def display_results(df_final, dossier_output):
 
     st.info("💡 Corrigez les valeurs si nécessaire directement dans le tableau ci-dessous.")
 
+    # Séparer les données éditables de l'image
+    if "Image_Annotée" in df_final.columns:
+        df_images = df_final[["Fichier", "Image_Annotée"]].copy()
+        df_editable = df_final.drop(columns=["Image_Annotée"])
+    else:
+        df_images = pd.DataFrame(columns=["Fichier", "Image_Annotée"])
+        df_editable = df_final
+
     # Tableau éditable
-    df_edited = st.data_editor(df_final, num_rows="dynamic", key="editor")
+    df_edited_data = st.data_editor(df_editable, num_rows="dynamic", key="editor")
+
+    # Fusionner les données éditées avec les images
+    df_edited = pd.merge(df_edited_data, df_images, on="Fichier", how="left")
 
     # Export
     col_export_excel, col_export_pdf = st.columns(2)
