@@ -33,8 +33,8 @@ The tool calculates the IOD-to-length ratio, a critical metric in developmental 
 
 1. **Clone the Repository:**
    ```bash
-   git clone https://github.com/your-repo/xenopus-pipeline.git
-   cd xenopus-pipeline
+   git clone <repository-url>
+   cd <repository-name>
    ```
 
 2. **Install Dependencies:**
@@ -52,7 +52,7 @@ The tool calculates the IOD-to-length ratio, a critical metric in developmental 
    - **Windows:** Double-click the `start.bat` file.
    - **Other OS / Manual:** Run the following command in your terminal:
      ```bash
-     streamlit run app.py
+     streamlit run src/app.py
      ```
 
 2. **Configure Parameters (in the sidebar):**

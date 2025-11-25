@@ -4,7 +4,8 @@ import cv2
 import os
 import tempfile
 import shutil
-from src.eyes_detection import analyze_tadpole_microscope, read_image
+from src.eyes_detection import analyze_tadpole_microscope
+from src.utils import read_image_with_unicode
 
 class TestVision(unittest.TestCase):
     def setUp(self):
@@ -34,7 +35,7 @@ class TestVision(unittest.TestCase):
         shutil.rmtree(self.test_dir)
 
     def test_read_image(self):
-        img = read_image(self.test_img_path)
+        img = read_image_with_unicode(self.test_img_path)
         self.assertIsNotNone(img)
         self.assertEqual(img.shape, (500, 500, 3))
 

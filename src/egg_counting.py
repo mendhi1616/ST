@@ -1,19 +1,13 @@
 import cv2
 import numpy as np
 import os
-
-def imread_windows_special(path):
-    try:
-        stream = np.fromfile(path, dtype=np.uint8)
-        img = cv2.imdecode(stream, cv2.IMREAD_COLOR)
-        return img
-    except: return None
+from .utils import read_image_with_unicode
 
 def analyze_eggs(image_path, debug=False):
     if not os.path.exists(image_path):
         return None, 0, 0, "Fichier introuvable"
 
-    img = imread_windows_special(image_path)
+    img = read_image_with_unicode(image_path)
     if img is None:
         return None, 0, 0, "Image illisible"
 

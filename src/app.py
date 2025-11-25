@@ -139,7 +139,7 @@ def main():
         run_analysis(files, params)
 
     if st.session_state.df_resultats is not None:
-        df_final, col_export_pdf = display_results(st.session_state.df_resultats, params["dossier_output"])
+        df_final, col_export_pdf = display_results(st.session_state.df_resultats, params["dossier_output"], params["mode_analyse"])
 
         # Le reste de l'interface (graphiques, stats, etc.) reste ici pour le moment
         if params["mode_analyse"] == "Têtards (Morphométrie)":
