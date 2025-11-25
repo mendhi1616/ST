@@ -3,5 +3,6 @@ numpy
 pandas
 scikit-image
 streamlit
-openpyxlfpdf
+openpyxl
+fpdf
 plotly
