@@ -11,6 +11,13 @@ from stats import calculate_significant_stats
 from report import generate_pdf_report
 from ui import setup_sidebar, display_results
 
+# --- CONSTANTES ---
+CONTROL_GROUP_ALIASES = {
+    "temoin": "Témoin",
+    "témoin": "Témoin",
+    "t": "Témoin"
+}
+
 def get_image_files(input_path: str) -> List[str]:
     """Récupère la liste des chemins de fichiers image à partir d'un dossier."""
     files = []
@@ -32,6 +39,9 @@ def process_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     except IndexError:
         tank, cond = "Inc", "Inc"
 
+    # Normalisation du groupe témoin
+    cond_normalized = CONTROL_GROUP_ALIASES.get(cond.lower(), cond)
+
     try:
         processed_img, len_px, eyes_px, msg = analyze_tadpole_microscope(path, debug=False)
 
@@ -41,14 +51,14 @@ def process_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         ratio = (eyes_mm / total_mm) if total_mm > 0 else 0
 
         return {
-            "Condition": cond, "Réplicat": tank, "Fichier": name,
+            "Condition": cond_normalized, "Réplicat": tank, "Fichier": name,
             "Corps_mm": round(corps_mm, 3), "Total_Estimé_mm": round(total_mm, 3),
             "Dist_Yeux_mm": round(eyes_mm, 3), "Rapport": round(ratio, 4),
             "Statut": msg, "Chemin_Complet": path, "Image_Annotée": processed_img
         }
     except Exception as e:
         return {
-            "Condition": cond, "Réplicat": tank, "Fichier": name,
+            "Condition": cond_normalized, "Réplicat": tank, "Fichier": name,
             "Statut": f"Erreur: {str(e)}", "Dist_Yeux_mm": 0, "Image_Annotée": None
         }
 
@@ -118,8 +128,14 @@ def main():
 
             with col_stats:
                 st.subheader("Tests de Significativité 🧪")
-                unique_conditions = df_clean["Condition"].unique()
-                control_group = st.selectbox("Groupe Témoin :", unique_conditions, index=0)
+                unique_conditions = sorted(df_clean["Condition"].unique())
+
+                # Sélection intelligente du groupe témoin
+                control_index = 0
+                if "Témoin" in unique_conditions:
+                    control_index = unique_conditions.index("Témoin")
+
+                control_group = st.selectbox("Groupe Témoin :", unique_conditions, index=control_index)
 
                 df_stats = calculate_significant_stats(df_clean, "Rapport", control_group=control_group)
                 if not df_stats.empty:
