@@ -15,6 +15,10 @@ class PDFReport(FPDF):
         self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
 
 def generate_pdf_report(df_results: pd.DataFrame, df_stats: pd.DataFrame, output_path: str):
+    """
+    Generate a PDF report.
+    df_results should be the filtered dataframe used for analysis (e.g. only profile_ok).
+    """
     pdf = PDFReport()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
@@ -23,14 +27,20 @@ def generate_pdf_report(df_results: pd.DataFrame, df_stats: pd.DataFrame, output
     pdf.ln(5)
 
     pdf.set_font("Arial", 'B', 14)
-    pdf.cell(0, 10, "1. Résumé des Données", ln=True)
+    pdf.cell(0, 10, "1. Résumé des Données (Filtres appliqués)", ln=True)
     pdf.set_font("Arial", size=11)
 
     total_images = len(df_results)
     conditions = df_results['Condition'].unique() if not df_results.empty else []
 
-    pdf.cell(0, 8, f"Nombre total d'images analysées: {total_images}", ln=True)
+    pdf.cell(0, 8, f"Nombre total d'images incluses: {total_images}", ln=True)
     pdf.cell(0, 8, f"Conditions détectées: {', '.join(conditions)}", ln=True)
+
+    # Optional: Add orientation breakdown if available
+    if 'Orientation' in df_results.columns:
+         pdf.ln(2)
+         pdf.cell(0, 8, "Note: Les données sont filtrées (Orientation='profile_ok' et Yeux détectés).", ln=True)
+
     pdf.ln(5)
 
     pdf.set_font("Arial", 'B', 14)
@@ -62,10 +72,18 @@ def generate_pdf_report(df_results: pd.DataFrame, df_stats: pd.DataFrame, output
     pdf.cell(0, 10, "3. Moyennes par Condition", ln=True)
 
     if not df_results.empty:
-        summary = df_results.groupby('Condition')[['Corps_mm', 'Dist_Yeux_mm', 'Rapport']].mean().reset_index()
+        # Check available columns
+        cols = ['Condition', 'Corps_mm', 'Dist_Yeux_mm', 'Rapport']
+        cols = [c for c in cols if c in df_results.columns]
+
+        summary = df_results.groupby('Condition')[cols].mean().reset_index()
 
         pdf.set_font("Arial", 'B', 10)
-        headers = ["Condition", "Corps (mm)", "Yeux (mm)", "Rapport Moyen"]
+        headers = ["Condition"]
+        if 'Corps_mm' in cols: headers.append("Corps (mm)")
+        if 'Dist_Yeux_mm' in cols: headers.append("Yeux (mm)")
+        if 'Rapport' in cols: headers.append("Rapport Moyen")
+
         col_width = 45
 
         for h in headers:
@@ -75,9 +93,9 @@ def generate_pdf_report(df_results: pd.DataFrame, df_stats: pd.DataFrame, output
         pdf.set_font("Arial", size=10)
         for _, row in summary.iterrows():
             pdf.cell(col_width, 8, str(row['Condition']), 1)
-            pdf.cell(col_width, 8, f"{row['Corps_mm']:.3f}", 1)
-            pdf.cell(col_width, 8, f"{row['Dist_Yeux_mm']:.3f}", 1)
-            pdf.cell(col_width, 8, f"{row['Rapport']:.4f}", 1)
+            if 'Corps_mm' in cols: pdf.cell(col_width, 8, f"{row['Corps_mm']:.3f}", 1)
+            if 'Dist_Yeux_mm' in cols: pdf.cell(col_width, 8, f"{row['Dist_Yeux_mm']:.3f}", 1)
+            if 'Rapport' in cols: pdf.cell(col_width, 8, f"{row['Rapport']:.4f}", 1)
             pdf.ln()
 
     try:

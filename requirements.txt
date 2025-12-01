@@ -6,3 +6,5 @@ streamlit
 openpyxl
 fpdf
 plotly
+torch
+torchvision
