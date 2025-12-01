@@ -40,7 +40,7 @@ def process_dataset_batch(root_folder, output_folder=None):
                 print(f"[{files_processed}] Traitement de {file}...", end="")
 
                 try:
-                    _, len_px_corps, eyes_px, status = analyze_tadpole_microscope(full_path, debug=False)
+                    _, len_px_corps, eyes_px, status, orientation = analyze_tadpole_microscope(full_path, debug=False)
                     corps_mm = len_px_corps * PIXEL_TO_MM
                     total_mm_estime = corps_mm * FACTEUR_QUEUE
                     eyes_mm = eyes_px * PIXEL_TO_MM
@@ -59,17 +59,18 @@ def process_dataset_batch(root_folder, output_folder=None):
                         "Dist. Yeux (mm)": round(eyes_mm, 3),
                         "Rapport (Yeux/Total)": round(ratio, 4),
                         "Statut Algo": status,
+                        "Orientation": orientation,
                         "Chemin": full_path
                     })
 
                     if "Succès" in status:
-                        print(f" OK (Rapport: {ratio:.3f})")
+                        print(f" OK ({orientation}, Rapport: {ratio:.3f})")
                     else:
                         print(f" ⚠️ {status}")
 
                 except Exception as e:
                     print(f" ERREUR: {e}")
-                    data.append({"Fichier": file, "Statut Algo": f"Crash: {e}"})
+                    data.append({"Fichier": file, "Statut Algo": f"Crash: {e}", "Orientation": "error"})
 
     if data:
         if not output_folder:
@@ -86,7 +87,7 @@ def process_dataset_batch(root_folder, output_folder=None):
 
             cols = ["Condition", "Réplicat", "Fichier",
                     "Longueur Totale Est. (mm)", "Dist. Yeux (mm)", "Rapport (Yeux/Total)",
-                    "Statut Algo", "Longueur Corps (mm)"]
+                    "Statut Algo", "Orientation", "Longueur Corps (mm)"]
 
             cols_existantes = [c for c in cols if c in df.columns]
             df = df[cols_existantes]

@@ -234,7 +234,8 @@ def process_tadpole_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     stage_normalized = stage.strip()
 
     try:
-        processed_img, len_px, eyes_px, msg = analyze_tadpole_microscope(path, debug=False)
+        # Now returns orientation as well
+        processed_img, len_px, eyes_px, msg, orientation = analyze_tadpole_microscope(path, debug=False)
 
         corps_mm = len_px * params["pixel_mm_ratio"]
         total_mm = corps_mm * params["facteur_queue"]
@@ -251,6 +252,7 @@ def process_tadpole_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
             "Dist_Yeux_mm": round(eyes_mm, 3),
             "Rapport": round(ratio, 4),
             "Statut": msg,
+            "Orientation": orientation,
             "Chemin_Complet": path,
             "Image_Annotée": processed_img,
         }
@@ -266,6 +268,7 @@ def process_tadpole_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
             "Dist_Yeux_mm": 0.0,
             "Rapport": 0.0,
             "Statut": f"Erreur: {str(e)}",
+            "Orientation": "error",
             "Chemin_Complet": path,
             "Image_Annotée": None,
         }
@@ -360,16 +363,30 @@ def main():
         df_final, col_export_pdf = display_results(st.session_state.df_resultats, params["dossier_output"], params["mode_analyse"])
 
         if params["mode_analyse"] == "Têtards (Morphométrie)":
-            df_clean = df_final[df_final["Dist_Yeux_mm"] > 0] if "Dist_Yeux_mm" in df_final.columns else df_final
+            # --- FILTERING LOGIC ---
+            # Filter for profile_ok and valid eye distance
+            if "Orientation" in df_final.columns and "Dist_Yeux_mm" in df_final.columns:
+                df_clean = df_final[
+                    (df_final["Orientation"] == "profile_ok") &
+                    (df_final["Dist_Yeux_mm"] > 0)
+                ]
+            else:
+                df_clean = df_final
+
+            # Show number of excluded samples
+            n_total = len(df_final)
+            n_kept = len(df_clean)
+            if n_total > n_kept:
+                st.warning(f"Exclusion des données invalides : {n_total - n_kept} images ignorées (Orientation non 'profile_ok' ou Yeux non détectés).")
+
             if all(col in df_clean.columns for col in ["Fécondation", "Condition", "Réplicat"]):
                 numeric_cols = df_clean.select_dtypes(include="number").columns
 
-                df_clean = (
+                df_clean_grouped = (
                     df_clean
                     .groupby(["Fécondation", "Condition", "Réplicat"], as_index=False)[numeric_cols]
                     .mean()
                 )
-
 
                     
             if not df_clean.empty and "Condition" in df_clean.columns and "Rapport" in df_clean.columns:
@@ -411,7 +428,7 @@ def main():
                     y="Rapport",
                     color="Condition",
                     points="all",
-                    title="Comparaison Témoin vs Polluants",
+                    title="Comparaison Témoin vs Polluants (Profils valides uniquement)",
                     color_discrete_map=CONDITION_COLOR_MAP,
                 )
 
@@ -433,7 +450,8 @@ def main():
                 with col_export_pdf:
                     if st.button("📄 Exporter Rapport PDF"):
                         path_pdf = os.path.join(params["dossier_output"], "Rapport_Analyse.pdf")
-                        if generate_pdf_report(df_analysis, df_stats, path_pdf):
+                        # Pass df_clean (filtered data) to report generation
+                        if generate_pdf_report(df_clean, df_stats, path_pdf):
                             st.success(f"Rapport PDF généré : {path_pdf}")
                         else:
                             st.error("Erreur lors de la génération du PDF.")
