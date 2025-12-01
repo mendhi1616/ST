@@ -19,7 +19,7 @@ def _extract_condition_replicate(image_path: str) -> Tuple[str, str]:
         return "unknown", "unknown"
 
 
-def _build_row(image_path: str, body_px: float, eye_px: float, status: str, pixel_mm_ratio: float, tail_factor: float) -> Dict:
+def _build_row(image_path: str, body_px: float, eye_px: float, status: str, pixel_mm_ratio: float, tail_factor: float, orientation: str) -> Dict:
     condition, replicate = _extract_condition_replicate(image_path)
     body_mm = body_px * pixel_mm_ratio
     total_mm = body_mm * tail_factor
@@ -35,6 +35,7 @@ def _build_row(image_path: str, body_px: float, eye_px: float, status: str, pixe
         "eye_distance_mm": round(eye_mm, 3),
         "ratio": round(ratio, 4),
         "status": status,
+        "orientation": orientation,
         "full_path": image_path,
     }
 
@@ -61,10 +62,10 @@ def run_tadpole_batch(
     for idx, image_path in enumerate(image_paths, start=1):
         log_status(logger, f"Processing {idx}/{len(image_paths)} - {image_path}")
         try:
-            _, body_px, eye_px, status = analyze_tadpole_microscope(image_path, debug=debug)
+            _, body_px, eye_px, status, orientation = analyze_tadpole_microscope(image_path, debug=debug)
             if not status.lower().startswith("succès"):
                 error_count += 1
-            results.append(_build_row(image_path, body_px, eye_px, status, pixel_mm_ratio, tail_factor))
+            results.append(_build_row(image_path, body_px, eye_px, status, pixel_mm_ratio, tail_factor, orientation))
         except Exception as exc:  
             error_count += 1
             log_error(logger, f"Crash on {image_path}: {exc}")
@@ -76,6 +77,7 @@ def run_tadpole_batch(
                     status=f"Erreur: {exc}",
                     pixel_mm_ratio=pixel_mm_ratio,
                     tail_factor=tail_factor,
+                    orientation="error"
                 )
             )
 
@@ -88,6 +90,7 @@ def run_tadpole_batch(
         "eye_distance_mm",
         "ratio",
         "status",
+        "orientation",
         "full_path",
     ])
 
@@ -103,4 +106,3 @@ def run_tadpole_batch(
     write_metadata(metadata, os.path.join(target_dir, "metadata.json"))
 
     return df, metadata
-

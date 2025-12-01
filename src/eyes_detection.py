@@ -7,31 +7,34 @@ try:
     from .utils import read_image_with_unicode
     from .segmentation_body import segment_tadpole_sam2
     from .eyes_ilastik import detect_eyes_ilastik
+    from .orientation import classify_orientation
 except ImportError:
     from utils import read_image_with_unicode
     from segmentation_body import segment_tadpole_sam2
     from eyes_ilastik import detect_eyes_ilastik
+    from orientation import classify_orientation
 
 def analyze_tadpole_microscope(
     image_path: str,
     debug: bool = False,
     output_dir: Optional[str] = None,
-) -> Tuple[Optional[np.ndarray], float, float, str]:
+) -> Tuple[Optional[np.ndarray], float, float, str, str]:
     """
-    Analyzes a tadpole image using SAM2 for body segmentation and Ilastik for eye detection.
+    Analyzes a tadpole image using SAM2 for body segmentation, Ilastik for eye detection,
+    and a CNN for orientation classification.
 
-    Returns: (annotated_image, body_length_px, eye_distance_px, status)
+    Returns: (annotated_image, body_length_px, eye_distance_px, status, orientation)
     """
 
     # ------------------------------------------------------------------
     # 0) Read Image
     # ------------------------------------------------------------------
     if not os.path.exists(image_path):
-        return None, 0.0, 0.0, "File not found"
+        return None, 0.0, 0.0, "File not found", "unknown"
 
     img = read_image_with_unicode(image_path)
     if img is None:
-        return None, 0.0, 0.0, "Image unreadable"
+        return None, 0.0, 0.0, "Image unreadable", "unknown"
 
     output_img = img.copy()
 
@@ -50,17 +53,43 @@ def analyze_tadpole_microscope(
 
     # Check if mask is empty
     if cv2.countNonZero(mask_body) == 0:
-        return output_img, 0.0, 0.0, "Body not detected (SAM2 failed)"
+        return output_img, 0.0, 0.0, "Body not detected (SAM2 failed)", "unknown"
 
     # Find contours to get hull and bounding rect
     cnts, _ = cv2.findContours(mask_body, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not cnts:
-        return output_img, 0.0, 0.0, "No contours in mask"
+        return output_img, 0.0, 0.0, "No contours in mask", "unknown"
 
     cnt = max(cnts, key=cv2.contourArea)
     hull = cv2.convexHull(cnt)
 
     cv2.drawContours(output_img, [hull], -1, (0, 255, 0), 2)
+
+    # ------------------------------------------------------------------
+    # 1.5) ORIENTATION CLASSIFICATION
+    # ------------------------------------------------------------------
+    # Crop the image to the bounding box of the body for classification
+    x, y, w, h = cv2.boundingRect(mask_body)
+    # Add some padding
+    pad = int(0.1 * max(w, h))
+    x0 = max(0, x - pad)
+    y0 = max(0, y - pad)
+    x1 = min(img.shape[1], x + w + pad)
+    y1 = min(img.shape[0], y + h + pad)
+
+    cropped_body = img[y0:y1, x0:x1]
+
+    orientation, orientation_conf = classify_orientation(cropped_body)
+
+    cv2.putText(
+        output_img,
+        f"Ori: {orientation} ({orientation_conf:.2f})",
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.0,
+        (0, 0, 255),
+        2
+    )
 
     # ------------------------------------------------------------------
     # 2) BODY LENGTH: minAreaRect
@@ -118,4 +147,4 @@ def analyze_tadpole_microscope(
     if debug and output_dir:
         cv2.imwrite(os.path.join(output_dir, "final_output.png"), output_img)
         
-    return output_img, body_length_px, eye_dist_px, status_eyes
+    return output_img, body_length_px, eye_dist_px, status_eyes, orientation
