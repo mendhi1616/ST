@@ -20,6 +20,8 @@ def analyze_tadpole_microscope(
     image_path: str,
     debug: bool = False,
     output_dir: Optional[str] = None,
+    ilastik_binary_path: Optional[str] = None,
+    ilastik_project_path: Optional[str] = None,
 ) -> Tuple[Optional[np.ndarray], float, float, str, str]:
     """
     Analyzes a tadpole image using SAM2 for body segmentation, Ilastik for eye detection,
@@ -130,7 +132,12 @@ def analyze_tadpole_microscope(
     # ------------------------------------------------------------------
     # 3) EYE DETECTION (Ilastik)
     # ------------------------------------------------------------------
-    eye1, eye2, eye_dist_px, status_eyes = detect_eyes_ilastik(img, mask_body)
+    eye1, eye2, eye_dist_px, status_eyes = detect_eyes_ilastik(
+        img,
+        mask_body,
+        ilastik_binary_path=ilastik_binary_path,
+        ilastik_project_path=ilastik_project_path
+    )
 
     if eye1 is not None and eye2 is not None:
         cv2.circle(output_img, eye1, 5, (255, 255, 0), -1)
@@ -154,6 +161,8 @@ def analyze_tadpole_microscope(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test eyes detection on a single image.")
     parser.add_argument("image_path", nargs='?', help="Path to the input image")
+    parser.add_argument("--ilastik-path", help="Path to Ilastik binary")
+    parser.add_argument("--ilastik-project", help="Path to Ilastik project file")
     args = parser.parse_args()
 
     # Default path for quick testing if no arg provided
@@ -165,7 +174,13 @@ if __name__ == "__main__":
 
     print(f"Analyzing {target_path}...")
 
-    annotated, length, eyes, status, ori = analyze_tadpole_microscope(target_path, debug=True, output_dir="debug_test")
+    annotated, length, eyes, status, ori = analyze_tadpole_microscope(
+        target_path,
+        debug=True,
+        output_dir="debug_test",
+        ilastik_binary_path=args.ilastik_path,
+        ilastik_project_path=args.ilastik_project
+    )
 
     if annotated is not None:
         output_path = "test_result_segmentation.jpg"

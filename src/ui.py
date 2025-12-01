@@ -29,6 +29,27 @@ def setup_sidebar():
     )
 
     st.sidebar.divider()
+    st.sidebar.header("Configuration Avancée")
+    # Determine default Ilastik path based on OS or environment
+    default_ilastik = os.getenv("ILASTIK_PATH", "ilastik")
+    if os.name == 'nt' and default_ilastik == "ilastik":
+        # Common Windows path example, just as a placeholder or hint
+        # Or keep it as "ilastik" if unknown.
+        pass
+
+    ilastik_path = st.sidebar.text_input(
+        "Chemin Exécutable Ilastik :",
+        value=default_ilastik,
+        help="Chemin complet vers l'exécutable Ilastik (ex: C:\\Program Files\\ilastik-1.4.0\\ilastik.exe). Requis pour la détection des yeux."
+    )
+
+    ilastik_project = st.sidebar.text_input(
+        "Projet Ilastik (.ilp) :",
+        value=os.getenv("ILASTIK_PROJECT", "eyes.ilp"),
+        help="Chemin vers le fichier projet Ilastik."
+    )
+
+    st.sidebar.divider()
     st.sidebar.header("Analyse d'un Fichier Unique")
     uploaded_file = st.sidebar.file_uploader(
         "Ou chargez une image ici :",
@@ -54,7 +75,9 @@ def setup_sidebar():
         "dossier_output": dossier_output,
         "uploaded_file": uploaded_file,
         "pixel_mm_ratio": pixel_mm_ratio,
-        "facteur_queue": facteur_queue
+        "facteur_queue": facteur_queue,
+        "ilastik_path": ilastik_path,
+        "ilastik_project": ilastik_project
     }
 
     return params

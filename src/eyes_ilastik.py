@@ -4,21 +4,27 @@ import numpy as np
 import cv2
 import tempfile
 import uuid
+from typing import Optional
 
-# Path to ilastik binary. This might need configuration.
-# Assuming 'ilastik' is in the PATH or set via env var.
-ILASTIK_BINARY = os.getenv("ILASTIK_PATH", "ilastik")
-ILASTIK_PROJECT = os.getenv("ILASTIK_PROJECT", "eyes.ilp")
+# Default fallback values
+DEFAULT_ILASTIK_BINARY = os.getenv("ILASTIK_PATH", "ilastik")
+DEFAULT_ILASTIK_PROJECT = os.getenv("ILASTIK_PROJECT", "eyes.ilp")
 
-def run_ilastik_headless(image: np.ndarray) -> np.ndarray:
+def run_ilastik_headless(
+    image: np.ndarray,
+    ilastik_binary_path: Optional[str] = None,
+    ilastik_project_path: Optional[str] = None
+) -> Optional[np.ndarray]:
     """
     Runs Ilastik in headless mode on the input image.
-    Returns the probability map (height, width, channels).
+    Returns the probability map (height, width, channels) or None on failure.
     """
-    # 1. Save input image to a temp file
-    # Ilastik handles many formats, TIFF or PNG or HDF5.
-    # Let's use PNG or TIFF.
 
+    # Resolve paths
+    binary = ilastik_binary_path if ilastik_binary_path and ilastik_binary_path.strip() else DEFAULT_ILASTIK_BINARY
+    project = ilastik_project_path if ilastik_project_path and ilastik_project_path.strip() else DEFAULT_ILASTIK_PROJECT
+
+    # 1. Save input image to a temp file
     temp_dir = tempfile.gettempdir()
     input_filename = f"ilastik_input_{uuid.uuid4()}.png"
     input_path = os.path.join(temp_dir, input_filename)
@@ -29,14 +35,10 @@ def run_ilastik_headless(image: np.ndarray) -> np.ndarray:
     output_path = os.path.join(temp_dir, output_filename)
 
     # 2. Construct command
-    # ilastik --headless --project=eyes.ilp --export_source=probabilities --output_filename_format={output_path} {input_path}
-    # Note: the output format might need adjustment depending on ilastik version.
-    # Usually it appends suffixes. Specifying exact output filename is better.
-
     cmd = [
-        ILASTIK_BINARY,
+        binary,
         "--headless",
-        f"--project={ILASTIK_PROJECT}",
+        f"--project={project}",
         "--export_source=probabilities",
         f"--output_filename_format={output_path}",
         input_path
@@ -45,9 +47,23 @@ def run_ilastik_headless(image: np.ndarray) -> np.ndarray:
     print(f"Running Ilastik: {' '.join(cmd)}")
 
     try:
-        # We assume the user has the binary installed. If not, this will raise FileNotFoundError or similar.
-        # Check if binary exists?
+        # Check if project file exists (better error message)
+        if not os.path.exists(project):
+            print(f"Warning: Ilastik project file not found at {project}")
+            # We proceed anyway, maybe it's a relative path that works for the binary context,
+            # but usually it's good to warn.
+
+        # Run subprocess
+        # Using check_call will raise CalledProcessError if return code != 0
+        # If binary is not found, it raises FileNotFoundError (WinError 2)
         subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    except FileNotFoundError:
+        print(f"Error: Ilastik binary not found at '{binary}'. Please check the configuration.")
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        return None
+
     except Exception as e:
         print(f"Error running Ilastik: {e}")
         # Clean up
@@ -56,19 +72,13 @@ def run_ilastik_headless(image: np.ndarray) -> np.ndarray:
         return None
 
     # 3. Read the output
-    # The output might be a TIFF.
     if not os.path.exists(output_path):
-        # Ilastik sometimes adds .h5 or similar if not specified correctly,
-        # but with output_filename_format it should be exact.
         print(f"Ilastik output file not found: {output_path}")
         if os.path.exists(input_path):
             os.remove(input_path)
         return None
 
-    # Read TIFF. cv2.imread might handle multi-page tiff or multi-channel?
-    # Ilastik probabilities are usually float32.
-    # OpenCV imread might load as uint8 if we are not careful.
-    # using cv2.IMREAD_UNCHANGED
+    # Read TIFF. cv2.imread might handle multi-page tiff or multi-channel
     prob_map = cv2.imread(output_path, cv2.IMREAD_UNCHANGED)
 
     # Clean up
@@ -81,7 +91,9 @@ def run_ilastik_headless(image: np.ndarray) -> np.ndarray:
 
 def detect_eyes_ilastik(
     image: np.ndarray,
-    body_mask: np.ndarray
+    body_mask: np.ndarray,
+    ilastik_binary_path: Optional[str] = None,
+    ilastik_project_path: Optional[str] = None
 ) -> tuple:
     """
     Detect eyes using Ilastik probabilities masked by SAM2 body mask.
@@ -91,7 +103,7 @@ def detect_eyes_ilastik(
     """
 
     # 1. Run Ilastik
-    prob_map = run_ilastik_headless(image)
+    prob_map = run_ilastik_headless(image, ilastik_binary_path, ilastik_project_path)
 
     if prob_map is None:
         return None, None, 0.0, "Ilastik failed or binary not found"
@@ -99,24 +111,19 @@ def detect_eyes_ilastik(
     # prob_map shape: (H, W, Classes)
     # We assume we need the "eye" class.
     # If the user trained 2 classes (Background, Eye), usually channel 1 is Eye.
-    # If more classes, we need to know which one is Eye.
-    # Assuming channel 1 for now (0-based index).
 
     if prob_map.ndim == 3:
         eye_prob = prob_map[:, :, 1] # Assumption: Channel 1 is Eye
     else:
-        # If it's single channel, maybe it is already the probability or class map?
         eye_prob = prob_map
 
     # Normalize to 0-255 if it's float
     if eye_prob.dtype != np.uint8:
-        # Assuming float 0..1
         eye_prob_u8 = (eye_prob * 255).astype(np.uint8)
     else:
         eye_prob_u8 = eye_prob
 
     # 2. Mask with body mask
-    # Ensure body_mask is same size
     if body_mask.shape[:2] != eye_prob_u8.shape[:2]:
         body_mask = cv2.resize(body_mask, (eye_prob_u8.shape[1], eye_prob_u8.shape[0]))
 
@@ -129,8 +136,6 @@ def detect_eyes_ilastik(
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(thresh, connectivity=8)
 
     # stats: [x, y, width, height, area]
-    # We want the two largest components (excluding background label 0)
-
     if num_labels < 3: # 0 is background, need at least 1 and 2
         return None, None, 0.0, "Eyes not detected (<2 components)"
 
