@@ -29,36 +29,43 @@ class TestVision(unittest.TestCase):
 
     @patch('eyes_detection.segment_tadpole_sam2')
     @patch('eyes_detection.detect_eyes_ilastik')
-    def test_analyze_tadpole_success(self, mock_eyes, mock_seg):
+    @patch('eyes_detection.classify_orientation')
+    def test_analyze_tadpole_success(self, mock_orient, mock_eyes, mock_seg):
         # Mock segmentation: Return a circle mask in the center
         mask = np.zeros((500, 500), dtype=np.uint8)
         cv2.circle(mask, (250, 250), 50, 255, -1)
         mock_seg.return_value = mask
 
         # Mock eyes: Return valid eye coordinates
-        # (eye1, eye2, dist, status)
         mock_eyes.return_value = ((240, 240), (260, 240), 20.0, "Success")
 
-        img, body_len, eye_dist, status = analyze_tadpole_microscope(self.test_img_path, debug=False)
+        # Mock orientation
+        mock_orient.return_value = ("profile_ok", 0.95)
+
+        img, body_len, eye_dist, status, orientation = analyze_tadpole_microscope(self.test_img_path, debug=False)
 
         self.assertIsNotNone(img)
         self.assertTrue(body_len > 0)
         self.assertEqual(eye_dist, 20.0)
         self.assertEqual(status, "Success")
+        self.assertEqual(orientation, "profile_ok")
 
     @patch('eyes_detection.segment_tadpole_sam2')
     def test_analyze_tadpole_seg_fail(self, mock_seg):
         # Mock segmentation: Return empty mask
         mock_seg.return_value = np.zeros((500, 500), dtype=np.uint8)
 
-        img, body_len, eye_dist, status = analyze_tadpole_microscope(self.test_img_path, debug=False)
+        # analyze_tadpole_microscope returns 5 values now
+        img, body_len, eye_dist, status, orientation = analyze_tadpole_microscope(self.test_img_path, debug=False)
 
         self.assertEqual(body_len, 0.0)
         self.assertIn("Body not detected", status)
+        self.assertEqual(orientation, "unknown")
 
     @patch('eyes_detection.segment_tadpole_sam2')
     @patch('eyes_detection.detect_eyes_ilastik')
-    def test_analyze_tadpole_eyes_fail(self, mock_eyes, mock_seg):
+    @patch('eyes_detection.classify_orientation')
+    def test_analyze_tadpole_eyes_fail(self, mock_orient, mock_eyes, mock_seg):
         # Mock valid segmentation
         mask = np.zeros((500, 500), dtype=np.uint8)
         cv2.circle(mask, (250, 250), 50, 255, -1)
@@ -67,11 +74,15 @@ class TestVision(unittest.TestCase):
         # Mock eyes failure
         mock_eyes.return_value = (None, None, 0.0, "Eyes not detected")
 
-        img, body_len, eye_dist, status = analyze_tadpole_microscope(self.test_img_path, debug=False)
+        # Mock orientation
+        mock_orient.return_value = ("profile_ok", 0.95)
+
+        img, body_len, eye_dist, status, orientation = analyze_tadpole_microscope(self.test_img_path, debug=False)
 
         self.assertTrue(body_len > 0)
         self.assertEqual(eye_dist, 0.0)
         self.assertIn("Eyes not detected", status)
+        self.assertEqual(orientation, "profile_ok")
 
 if __name__ == '__main__':
     unittest.main()

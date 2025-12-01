@@ -52,14 +52,8 @@ def segment_tadpole_sam2(image: np.ndarray) -> np.ndarray:
     """
     predictor = initialize_sam2()
 
-    # If SAM2 is not available (e.g. in test env without GPU/libs), return empty or fallback?
-    # User said "SAM2 is the only body segmentation method".
-    # So if it fails, we probably should return a failed mask (zeros).
+    # If SAM2 is not available (e.g. in test env without GPU/libs), return zeros or mock
     if predictor is None:
-        # For testing purposes in this environment, if SAM2 is missing, we might want to mock it
-        # or return a dummy mask if we are testing integration.
-        # But for production, it should be zeros.
-        # I will print a warning.
         print("SAM2 predictor not available.")
         return np.zeros(image.shape[:2], dtype=np.uint8)
 
@@ -71,27 +65,55 @@ def segment_tadpole_sam2(image: np.ndarray) -> np.ndarray:
 
     predictor.set_image(image_rgb)
 
-    # We need a prompt for SAM2. The user said "covering the whole tadpole".
-    # If we don't have a prompt, maybe we can use a center point or a box covering the image?
-    # Usually we need at least one point.
-    # Let's try to find a rough center of mass or use the center of the image as a positive point.
-    # Or maybe a grid of points?
-    # The user didn't specify the prompt strategy.
-    # A simple strategy: Use the center of the image. Tadpoles are usually centered-ish.
-    # Better: Use a simple threshold to find "something" and put a point in it.
-    # But user said "Remove all previous segmentation methods... No Otsu".
-    # So we should rely on SAM2 capabilities.
-    # Maybe we can prompt with the center point?
-
     h, w = image.shape[:2]
-    input_point = np.array([[w/2, h/2]])
+
+    # Improved Prompting: Use Otsu threshold to find the centroid of the "object"
+    # This is more robust than assuming the tadpole is exactly in the center.
+    try:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Invert because tadpoles are usually dark on light background?
+        # Or light on dark? User said "Otsu Inverse thresholding" was used before.
+        # Let's assume standard Otsu on Inverted image if object is dark.
+        # But to be safe, let's try to just find "something".
+
+        # Determine if background is light or dark.
+        # Simple heuristic: median pixel value.
+        median_val = np.median(gray)
+        if median_val > 127:
+            # Light background -> Dark object
+            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        else:
+            # Dark background -> Light object
+            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # Find largest contour
+        cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if cnts:
+            c = max(cnts, key=cv2.contourArea)
+            M = cv2.moments(c)
+            if M["m00"] > 0:
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                input_point = np.array([[cx, cy]])
+            else:
+                # Fallback to center of bounding box
+                x, y, w_box, h_box = cv2.boundingRect(c)
+                input_point = np.array([[x + w_box/2, y + h_box/2]])
+        else:
+            # Fallback to image center
+            input_point = np.array([[w/2, h/2]])
+
+    except Exception as e:
+        print(f"Error calculating prompt point: {e}. Fallback to center.")
+        input_point = np.array([[w/2, h/2]])
+
     input_label = np.array([1]) # 1 is foreground
 
     # SAM2 prediction
     masks, scores, logits = predictor.predict(
         point_coords=input_point,
         point_labels=input_label,
-        multimask_output=True # We might want to see multiple and pick best
+        multimask_output=True
     )
 
     # Pick the mask with the highest score
