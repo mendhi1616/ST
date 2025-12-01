@@ -282,7 +282,7 @@ def process_egg_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         processed_img, fecondes, non_fecondes, msg = analyze_eggs(path, debug=False)
 
         total = fecondes + non_fecondes
-        fertilization_rate = (fecondes / total) * 100 if total > 0 else 0.0
+        fertilization_rate = (fecondes / (fecondes + non_fecondes)) * 100 if total > 0 else 0.0
 
         return {
             "Fécondation": stage_normalized,
@@ -463,14 +463,25 @@ def main():
 
                 df_stats = calculate_significant_stats(df_analysis, "Taux_Fecondation", control_group=control_group)
 
+                # On calcule une valeur par condition (médiane du taux de fécondation)
+                df_plot = (
+                    df_analysis
+                    .groupby("Condition", as_index=False)["Taux_Fecondation"]
+                    .median()
+                )
+
                 fig = px.bar(
-                    df_analysis,
+                    df_plot,
                     x="Condition",
                     y="Taux_Fecondation",
                     color="Condition",
-                    title="Comparaison du Taux de Fécondation",
+                    title="Comparaison du Taux de Fécondation (médiane par condition)",
                     color_discrete_map=CONDITION_COLOR_MAP,
                 )
+
+                # Optionnel : forcer l’axe à 0–100 %
+                fig.update_yaxes(title="Taux de fécondation (%)", range=[0, 100])
+
 
                 fig = add_significance_annotations(
                     fig,

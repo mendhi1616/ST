@@ -106,3 +106,5 @@ venv.bak/
 # Streamlit
 streamlit.log
 temp_images/
+data/results/debug_MC120002.JPG
+/data/results
