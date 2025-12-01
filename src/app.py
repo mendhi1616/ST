@@ -189,8 +189,8 @@ def add_significance_annotations(
 
         fig.add_shape(
             type="line",
-            x0=x1,
             x1=x1,
+            x0=x1,
             xref="x",
             y0=y_bar,
             y1=y_bar * 0.995,
@@ -235,7 +235,12 @@ def process_tadpole_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         # Now returns orientation as well
-        processed_img, len_px, eyes_px, msg, orientation = analyze_tadpole_microscope(path, debug=False)
+        processed_img, len_px, eyes_px, msg, orientation = analyze_tadpole_microscope(
+            path,
+            debug=False,
+            ilastik_binary_path=params.get("ilastik_path"),
+            ilastik_project_path=params.get("ilastik_project")
+        )
 
         corps_mm = len_px * params["pixel_mm_ratio"]
         total_mm = corps_mm * params["facteur_queue"]
