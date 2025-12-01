@@ -2,7 +2,9 @@ import cv2
 import numpy as np
 import os
 import sys
+import argparse
 from typing import Tuple, Optional, List, Dict, Any
+
 try:
     from .utils import read_image_with_unicode
     from .segmentation_body import segment_tadpole_sam2
@@ -143,8 +145,38 @@ def analyze_tadpole_microscope(
             (255, 255, 255),
             2,
         )
-    
+
     if debug and output_dir:
         cv2.imwrite(os.path.join(output_dir, "final_output.png"), output_img)
-        
+
     return output_img, body_length_px, eye_dist_px, status_eyes, orientation
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Test eyes detection on a single image.")
+    parser.add_argument("image_path", nargs='?', help="Path to the input image")
+    args = parser.parse_args()
+
+    # Default path for quick testing if no arg provided
+    target_path = args.image_path
+    if not target_path:
+        # Try to find a default file or prompt
+        print("No image path provided. Please provide a path as an argument.")
+        sys.exit(1)
+
+    print(f"Analyzing {target_path}...")
+
+    annotated, length, eyes, status, ori = analyze_tadpole_microscope(target_path, debug=True, output_dir="debug_test")
+
+    if annotated is not None:
+        output_path = "test_result_segmentation.jpg"
+        cv2.imwrite(output_path, annotated)
+        print(f"\n✅ Result saved to: {os.path.abspath(output_path)}")
+        print(f"Debug images saved to: {os.path.abspath('debug_test')}")
+        print(f"📊 Metrics:")
+        print(f"   - Body Length: {length} px")
+        print(f"   - Eye Distance: {eyes} px")
+        print(f"   - Orientation: {ori}")
+        print(f"   - Status: {status}")
+    else:
+        print("❌ Analysis failed to produce an image.")
+        print(f"   - Status: {status}")
