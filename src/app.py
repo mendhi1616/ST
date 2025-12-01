@@ -361,6 +361,17 @@ def main():
 
         if params["mode_analyse"] == "Têtards (Morphométrie)":
             df_clean = df_final[df_final["Dist_Yeux_mm"] > 0] if "Dist_Yeux_mm" in df_final.columns else df_final
+            if all(col in df_clean.columns for col in ["Fécondation", "Condition", "Réplicat"]):
+                numeric_cols = df_clean.select_dtypes(include="number").columns
+
+                df_clean = (
+                    df_clean
+                    .groupby(["Fécondation", "Condition", "Réplicat"], as_index=False)[numeric_cols]
+                    .mean()
+                )
+
+
+                    
             if not df_clean.empty and "Condition" in df_clean.columns and "Rapport" in df_clean.columns:
                 st.divider()
                 st.header("3. Analyse Statistique Automatisée")
