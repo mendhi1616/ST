@@ -42,7 +42,7 @@ def get_sam_prompt_point(image: np.ndarray) -> tuple[int, int]:
       - Otsu
       - garde la plus grande composante
       - retourne le centroïde
-    
+
     Si aucun contour → centre de l’image (fallback)
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -116,32 +116,32 @@ def robust_segmentation_redness(image: np.ndarray) -> np.ndarray:
     """
     if image.ndim == 2:
         image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        
+
     b, g, r = cv2.split(image)
-    
+
     # Indice de Rougeur : le fond est très rouge, le têtard peu.
     redness = cv2.subtract(r, ((g.astype(np.float32) + b.astype(np.float32))/2).astype(np.uint8))
-    
+
     # Seuillage Otsu : Fond (rouge) >> Seuil >> Têtard (gris)
     # Le fond sera Blanc (255), le têtard Noir (0)
     _, mask_bg = cv2.threshold(redness, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
+
     # On inverse : Têtard = Blanc (255)
     mask_body = cv2.bitwise_not(mask_bg)
-    
+
     # Nettoyage pour avoir une forme propre
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
     mask_body = cv2.morphologyEx(mask_body, cv2.MORPH_CLOSE, kernel, iterations=4)
     mask_body = cv2.morphologyEx(mask_body, cv2.MORPH_OPEN, kernel, iterations=2)
-    
+
     # Garder le plus gros objet centré
     cnts, _ = cv2.findContours(mask_body, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     final_mask = np.zeros_like(mask_body)
-    
+
     if cnts:
         c = max(cnts, key=cv2.contourArea)
         cv2.drawContours(final_mask, [c], -1, 255, -1)
-        
+
     return final_mask
 
 def get_bright_spots(image: np.ndarray, mask_roi: np.ndarray) -> list:
@@ -149,13 +149,13 @@ def get_bright_spots(image: np.ndarray, mask_roi: np.ndarray) -> list:
     Trouve les points très brillants (reflets) pour les donner comme points NÉGATIFS à SAM.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
+
     # On cherche les pixels très blancs (>240) à l'intérieur de la zone d'intérêt
     _, mask_bright = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
     mask_bright = cv2.bitwise_and(mask_bright, mask_bright, mask=mask_roi)
-    
+
     cnts, _ = cv2.findContours(mask_bright, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
+
     negative_points = []
     for c in cnts:
         # On prend le centre du reflet
@@ -164,7 +164,7 @@ def get_bright_spots(image: np.ndarray, mask_roi: np.ndarray) -> list:
             cx = int(M["m10"] / M["m00"])
             cy = int(M["m01"] / M["m00"])
             negative_points.append([cx, cy])
-            
+
     return negative_points
 
 
@@ -238,17 +238,18 @@ def segment_tadpole_sam2(image: np.ndarray, debug=False, debug_dir=None) -> np.n
         # 1. Génération du guide (Prompt) via la méthode Rougeur
         pre_mask = robust_segmentation_redness(image)
         cnts, _ = cv2.findContours(pre_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        box_prompt = None
-        input_point = None
-        input_label = None
 
         h_img, w_img = image.shape[:2]
+
+        # Initialisation par défaut pour éviter NameError ou None
+        input_point = np.array([[w_img // 2, h_img // 2]], dtype=np.float32)
+        input_label = np.array([1], dtype=np.int32)
+        box_prompt = None
 
         if cnts:
             c = max(cnts, key=cv2.contourArea)
             x, y, w, h = cv2.boundingRect(c)
-            
+
             # Boîte englobante avec une petite marge
             pad = 10
             x1 = max(0, x - pad)
@@ -256,7 +257,7 @@ def segment_tadpole_sam2(image: np.ndarray, debug=False, debug_dir=None) -> np.n
             x2 = min(w_img, x + w + pad)
             y2 = min(h_img, y + h + pad)
             box_prompt = np.array([x1, y1, x2, y2], dtype=np.float32)
-            
+
             # Point central positif
             M = cv2.moments(c)
             if M["m00"] > 0:
@@ -264,10 +265,15 @@ def segment_tadpole_sam2(image: np.ndarray, debug=False, debug_dir=None) -> np.n
                 cy = int(M["m01"] / M["m00"])
                 input_point = np.array([[cx, cy]], dtype=np.float32)
                 input_label = np.array([1], dtype=np.int32)
+            else:
+                 # Fallback to bbox center if moments fail
+                 cx = x + w // 2
+                 cy = y + h // 2
+                 input_point = np.array([[cx, cy]], dtype=np.float32)
+                 input_label = np.array([1], dtype=np.int32)
         else:
-            # Fallback centre image
-            input_point = np.array([[w_img // 2, h_img // 2]], dtype=np.float32)
-            input_label = np.array([1], dtype=np.int32)
+            # Fallback already handled by default initialization
+            pass
 
         # 2. Prédiction SAM
         masks, scores, logits = predictor.predict(
@@ -285,9 +291,9 @@ def segment_tadpole_sam2(image: np.ndarray, debug=False, debug_dir=None) -> np.n
         # --- 4. CORRECTION AUTOMATIQUE D'INVERSION (CORNER CHECK) ---
         # On vérifie les 4 coins de l'image. S'ils sont blancs, c'est que le masque est inversé.
         corners = [
-            final_mask[0, 0], 
-            final_mask[0, w_img-1], 
-            final_mask[h_img-1, 0], 
+            final_mask[0, 0],
+            final_mask[0, w_img-1],
+            final_mask[h_img-1, 0],
             final_mask[h_img-1, w_img-1]
         ]
         # Si plus de 2 coins sont "sélectionnés" (255), c'est le fond !
@@ -298,14 +304,14 @@ def segment_tadpole_sam2(image: np.ndarray, debug=False, debug_dir=None) -> np.n
         # Nettoyage final
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel)
-        
+
         # Garder le plus gros objet restant (pour virer les îlots de bruit du fond)
         cnts_final, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         clean_mask = np.zeros_like(final_mask)
         if cnts_final:
             c_max = max(cnts_final, key=cv2.contourArea)
             cv2.drawContours(clean_mask, [c_max], -1, 255, -1)
-            
+
         return clean_mask
 
     except Exception as e:
