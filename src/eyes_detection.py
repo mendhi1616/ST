@@ -49,6 +49,8 @@ def binarize_eye_prob(eye_prob: np.ndarray,
 
     return eye_mask
 
+
+
 def analyze_tadpole_microscope(
     image_path: str,
     debug: bool = False,

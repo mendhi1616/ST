@@ -4,54 +4,36 @@ import numpy as np
 import cv2
 import torch
 
-# Try importing SAM2
 try:
     from sam2.sam2_image_predictor import SAM2ImagePredictor
     HAS_SAM2 = True
 except ImportError:
     HAS_SAM2 = False
 
-
-# Global instance
 SAM2_PREDICTOR = None
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Default config/checkpoint names
-# User asked for "sam2-hiera-base" model.
-# In SAM2 repo, the config is usually "sam2_hiera_b+.yaml" or similar for base_plus.
-# The user specifically mentioned "sam2-hiera-base".
-# The closest official model is "sam2_hiera_base_plus" (b+).
-# We will use environment variables to allow flexibility.
-SAM2_PREDICTOR = None
 
 def initialize_sam2():
-    """
-    Initialise SAM2 via Hugging Face:
-    facebook/sam2-hiera-base-plus
-    """
+    """Initialise SAM2 via Hugging Face"""
     global SAM2_PREDICTOR
-
     if SAM2_PREDICTOR is not None:
         return SAM2_PREDICTOR
 
     if not HAS_SAM2:
-        print("Warning: SAM2 python package not found. Falling back to Otsu segmentation.")
+        print("Warning: SAM2 python package not found.")
         return None
-
-    import torch
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     try:
-        print("Loading SAM2 from Hugging Face (facebook/sam2-hiera-base-plus)...")
+        # On utilise le modèle base-plus qui est un bon compromis
+        print(f"Loading SAM2 model on {device}...")
         predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2-hiera-base-plus")
         predictor.model.to(device)
         SAM2_PREDICTOR = predictor
-        print("✅ SAM2 initialized from Hugging Face on", device)
         return SAM2_PREDICTOR
     except Exception as e:
-        print(f"Error initializing SAM2 from Hugging Face: {e}. Falling back to Otsu segmentation.")
+        print(f"Error initializing SAM2: {e}")
         return None
-
 
 def get_sam_prompt_point(image: np.ndarray) -> tuple[int, int]:
     """
@@ -127,6 +109,64 @@ def fallback_segmentation_otsu(image: np.ndarray) -> np.ndarray:
 
     return clean_mask
 
+def robust_segmentation_redness(image: np.ndarray) -> np.ndarray:
+    """
+    Segmentation de secours basée sur la couleur (Fond Rouge vs Têtard Gris).
+    Utilisée pour générer la boite guide pour SAM.
+    """
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        
+    b, g, r = cv2.split(image)
+    
+    # Indice de Rougeur : le fond est très rouge, le têtard peu.
+    redness = cv2.subtract(r, ((g.astype(np.float32) + b.astype(np.float32))/2).astype(np.uint8))
+    
+    # Seuillage Otsu : Fond (rouge) >> Seuil >> Têtard (gris)
+    # Le fond sera Blanc (255), le têtard Noir (0)
+    _, mask_bg = cv2.threshold(redness, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # On inverse : Têtard = Blanc (255)
+    mask_body = cv2.bitwise_not(mask_bg)
+    
+    # Nettoyage pour avoir une forme propre
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    mask_body = cv2.morphologyEx(mask_body, cv2.MORPH_CLOSE, kernel, iterations=4)
+    mask_body = cv2.morphologyEx(mask_body, cv2.MORPH_OPEN, kernel, iterations=2)
+    
+    # Garder le plus gros objet centré
+    cnts, _ = cv2.findContours(mask_body, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    final_mask = np.zeros_like(mask_body)
+    
+    if cnts:
+        c = max(cnts, key=cv2.contourArea)
+        cv2.drawContours(final_mask, [c], -1, 255, -1)
+        
+    return final_mask
+
+def get_bright_spots(image: np.ndarray, mask_roi: np.ndarray) -> list:
+    """
+    Trouve les points très brillants (reflets) pour les donner comme points NÉGATIFS à SAM.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    # On cherche les pixels très blancs (>240) à l'intérieur de la zone d'intérêt
+    _, mask_bright = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
+    mask_bright = cv2.bitwise_and(mask_bright, mask_bright, mask=mask_roi)
+    
+    cnts, _ = cv2.findContours(mask_bright, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    negative_points = []
+    for c in cnts:
+        # On prend le centre du reflet
+        M = cv2.moments(c)
+        if M["m00"] > 0:
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+            negative_points.append([cx, cy])
+            
+    return negative_points
+
 
 def postprocess_body_mask(mask: np.ndarray,
                           min_area_ratio: float = 0.01,
@@ -178,72 +218,96 @@ def postprocess_body_mask(mask: np.ndarray,
 
 def segment_tadpole_sam2(image: np.ndarray, debug=False, debug_dir=None) -> np.ndarray:
     """
-    Segment the full tadpole (head + body + tail) using SAM2.
-    Input: RGB/BGR image (numpy array)
-    Output: 0/255 binary mask
+    Segmentation SAM2 avec correction automatique d'inversion.
     """
     predictor = initialize_sam2()
 
-    # Fallback if SAM2 is not ready
+    # Fallback si SAM2 absent
     if predictor is None:
-        return fallback_segmentation_otsu(image)
+        return robust_segmentation_redness(image)
 
-    # SAM2 expects RGB
+    # Préparation image
     if image.ndim == 3 and image.shape[2] == 3:
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     else:
         image_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
 
-    predictor.set_image(image_rgb)
-
-    h, w = image.shape[:2]
-
     try:
-        # On utilise notre fallback Otsu JUSTE pour trouver un point au centre du têtard
-        pre_mask = fallback_segmentation_otsu(image)
+        predictor.set_image(image_rgb)
 
+        # 1. Génération du guide (Prompt) via la méthode Rougeur
+        pre_mask = robust_segmentation_redness(image)
         cnts, _ = cv2.findContours(pre_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        box_prompt = None
+        input_point = None
+        input_label = None
+
+        h_img, w_img = image.shape[:2]
+
         if cnts:
             c = max(cnts, key=cv2.contourArea)
+            x, y, w, h = cv2.boundingRect(c)
+            
+            # Boîte englobante avec une petite marge
+            pad = 10
+            x1 = max(0, x - pad)
+            y1 = max(0, y - pad)
+            x2 = min(w_img, x + w + pad)
+            y2 = min(h_img, y + h + pad)
+            box_prompt = np.array([x1, y1, x2, y2], dtype=np.float32)
+            
+            # Point central positif
             M = cv2.moments(c)
             if M["m00"] > 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
                 input_point = np.array([[cx, cy]], dtype=np.float32)
-            else:
-                x, y, w_box, h_box = cv2.boundingRect(c)
-                cx = int(x + w_box / 2)
-                cy = int(y + h_box / 2)
-                input_point = np.array([[cx, cy]], dtype=np.float32)
+                input_label = np.array([1], dtype=np.int32)
         else:
-            # Aucun contour → on tombe au centre de l'image
-            input_point = np.array([[w / 2, h / 2]], dtype=np.float32)
+            # Fallback centre image
+            input_point = np.array([[w_img // 2, h_img // 2]], dtype=np.float32)
+            input_label = np.array([1], dtype=np.int32)
 
-    except Exception as e:
-        print(f"Error calculating prompt point: {e}. Fallback to center.")
-        input_point = np.array([[w / 2, h / 2]], dtype=np.float32)
-
-
-    # SAM2 prediction
-    try:
+        # 2. Prédiction SAM
         masks, scores, logits = predictor.predict(
             point_coords=input_point,
             point_labels=input_label,
+            box=box_prompt,
             multimask_output=True,
         )
 
-        # Pick best mask
+        # 3. Sélection du meilleur masque
         best_idx = int(np.argmax(scores))
-        best_mask = masks[best_idx]  # [H, W] bool
+        best_mask = masks[best_idx]
+        final_mask = (best_mask > 0).astype(np.uint8) * 255
 
-        # Post-traitement du masque
-        refined = postprocess_body_mask(best_mask)
-        if refined is None:
-            print("[DEBUG] SAM2 mask looks bad, falling back to Otsu.")
-            return fallback_segmentation_otsu(image)
+        # --- 4. CORRECTION AUTOMATIQUE D'INVERSION (CORNER CHECK) ---
+        # On vérifie les 4 coins de l'image. S'ils sont blancs, c'est que le masque est inversé.
+        corners = [
+            final_mask[0, 0], 
+            final_mask[0, w_img-1], 
+            final_mask[h_img-1, 0], 
+            final_mask[h_img-1, w_img-1]
+        ]
+        # Si plus de 2 coins sont "sélectionnés" (255), c'est le fond !
+        if sum([1 for c in corners if c > 127]) > 2:
+            if debug: print("[SAM2] Masque inversé détecté (Fond sélectionné). Inversion...")
+            final_mask = cv2.bitwise_not(final_mask)
 
-        return refined
+        # Nettoyage final
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_OPEN, kernel)
+        
+        # Garder le plus gros objet restant (pour virer les îlots de bruit du fond)
+        cnts_final, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        clean_mask = np.zeros_like(final_mask)
+        if cnts_final:
+            c_max = max(cnts_final, key=cv2.contourArea)
+            cv2.drawContours(clean_mask, [c_max], -1, 255, -1)
+            
+        return clean_mask
 
     except Exception as e:
-        print(f"Error during SAM2 inference: {e}. Fallback to Otsu.")
-        return fallback_segmentation_otsu(image)
+        print(f"Error SAM2: {e}. Fallback Otsu.")
+        return robust_segmentation_redness(image)
