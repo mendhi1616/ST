@@ -6,12 +6,11 @@ import torch
 
 # Try importing SAM2
 try:
-    from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
     HAS_SAM2 = True
 except ImportError:
     HAS_SAM2 = False
-    # No print warning here, we will handle it in initialize_sam2
+
 
 # Global instance
 SAM2_PREDICTOR = None
@@ -23,11 +22,15 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # The user specifically mentioned "sam2-hiera-base".
 # The closest official model is "sam2_hiera_base_plus" (b+).
 # We will use environment variables to allow flexibility.
-CHECKPOINT_PATH = os.getenv("SAM2_CHECKPOINT", "checkpoints/sam2_hiera_base_plus.pt")
-MODEL_CFG = os.getenv("SAM2_CONFIG", "sam2_hiera_b+.yaml")
+SAM2_PREDICTOR = None
 
 def initialize_sam2():
+    """
+    Initialise SAM2 via Hugging Face:
+    facebook/sam2-hiera-base-plus
+    """
     global SAM2_PREDICTOR
+
     if SAM2_PREDICTOR is not None:
         return SAM2_PREDICTOR
 
@@ -35,22 +38,57 @@ def initialize_sam2():
         print("Warning: SAM2 python package not found. Falling back to Otsu segmentation.")
         return None
 
-    if not os.path.exists(CHECKPOINT_PATH):
-        print(f"Warning: SAM2 checkpoint not found at {CHECKPOINT_PATH}. Falling back to Otsu segmentation.")
-        return None
+    import torch
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     try:
-        # Assuming standard SAM2 usage
-        # Note: build_sam2 might need absolute path to config or be in python path.
-        # We assume the user installed sam2 properly.
-        sam2_model = build_sam2(MODEL_CFG, CHECKPOINT_PATH, device=DEVICE)
-        SAM2_PREDICTOR = SAM2ImagePredictor(sam2_model)
-        print(f"Success: SAM2 initialized with {CHECKPOINT_PATH}")
+        print("Loading SAM2 from Hugging Face (facebook/sam2-hiera-base-plus)...")
+        predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2-hiera-base-plus")
+        predictor.model.to(device)
+        SAM2_PREDICTOR = predictor
+        print("✅ SAM2 initialized from Hugging Face on", device)
+        return SAM2_PREDICTOR
     except Exception as e:
-        print(f"Error initializing SAM2: {e}. Falling back to Otsu segmentation.")
+        print(f"Error initializing SAM2 from Hugging Face: {e}. Falling back to Otsu segmentation.")
         return None
 
-    return SAM2_PREDICTOR
+
+def get_sam_prompt_point(image: np.ndarray) -> tuple[int, int]:
+    """
+    Génère un point fiable pour SAM :
+      - convertit en gris
+      - Otsu
+      - garde la plus grande composante
+      - retourne le centroïde
+    
+    Si aucun contour → centre de l’image (fallback)
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Otsu rapide
+    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # Inversion si besoin (si fond clair)
+    if np.mean(otsu == 255) > 0.8:   # trop blanc -> invert
+        otsu = 255 - otsu
+
+    cnts, _ = cv2.findContours(otsu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        h, w = gray.shape
+        return (w // 2, h // 2)
+
+    # plus gros contour
+    c = max(cnts, key=cv2.contourArea)
+
+    M = cv2.moments(c)
+    if M["m00"] == 0:
+        h, w = gray.shape
+        return (w // 2, h // 2)
+
+    cx = int(M["m10"] / M["m00"])
+    cy = int(M["m01"] / M["m00"])
+    return (cx, cy)
+
 
 def fallback_segmentation_otsu(image: np.ndarray) -> np.ndarray:
     """
@@ -89,7 +127,56 @@ def fallback_segmentation_otsu(image: np.ndarray) -> np.ndarray:
 
     return clean_mask
 
-def segment_tadpole_sam2(image: np.ndarray) -> np.ndarray:
+
+def postprocess_body_mask(mask: np.ndarray,
+                          min_area_ratio: float = 0.01,
+                          max_area_ratio: float = 0.8) -> np.ndarray | None:
+    """
+    Nettoie le masque SAM2 :
+      - binarisation
+      - ouverture / fermeture morpho
+      - garde la plus grande composante
+      - vérifie que l'aire est raisonnable par rapport à l'image
+
+    Retourne:
+        - masque 0/255 propre
+        - ou None si le masque est trop petit / trop gros (pour fallback Otsu)
+    """
+    if mask.ndim == 3:
+        # SAM2 renvoie (1, H, W) ou (N, H, W) parfois
+        mask = mask.squeeze()
+
+    mask_u8 = (mask > 0).astype(np.uint8) * 255
+
+    h, w = mask_u8.shape
+
+    # Morpho pour lisser
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+    mask_clean = cv2.morphologyEx(mask_u8, cv2.MORPH_OPEN, kernel, iterations=2)
+    mask_clean = cv2.morphologyEx(mask_clean, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    # Garder la plus grande composante
+    cnts, _ = cv2.findContours(mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None
+
+    c = max(cnts, key=cv2.contourArea)
+    final_mask = np.zeros_like(mask_clean)
+    cv2.drawContours(final_mask, [c], -1, 255, -1)
+
+    # Vérifier la taille du masque
+    area = cv2.countNonZero(final_mask)
+    ratio = area / float(h * w)
+
+    if ratio < min_area_ratio or ratio > max_area_ratio:
+        # Trop petit ou trop énorme → probablement faux
+        print(f"[DEBUG] SAM2 mask area ratio suspicious: {ratio:.3f}")
+        return None
+
+    return final_mask
+
+
+def segment_tadpole_sam2(image: np.ndarray, debug=False, debug_dir=None) -> np.ndarray:
     """
     Segment the full tadpole (head + body + tail) using SAM2.
     Input: RGB/BGR image (numpy array)
@@ -111,10 +198,8 @@ def segment_tadpole_sam2(image: np.ndarray) -> np.ndarray:
 
     h, w = image.shape[:2]
 
-    # Improved Prompting: Use Otsu threshold to find the centroid of the "object"
     try:
-        # Use our fallback logic just to find the centroid!
-        # This is efficient because we need a prompt anyway.
+        # On utilise notre fallback Otsu JUSTE pour trouver un point au centre du têtard
         pre_mask = fallback_segmentation_otsu(image)
 
         cnts, _ = cv2.findContours(pre_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -124,31 +209,40 @@ def segment_tadpole_sam2(image: np.ndarray) -> np.ndarray:
             if M["m00"] > 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
-                input_point = np.array([[cx, cy]])
+                input_point = np.array([[cx, cy]], dtype=np.float32)
             else:
                 x, y, w_box, h_box = cv2.boundingRect(c)
-                input_point = np.array([[x + w_box/2, y + h_box/2]])
+                cx = int(x + w_box / 2)
+                cy = int(y + h_box / 2)
+                input_point = np.array([[cx, cy]], dtype=np.float32)
         else:
-            input_point = np.array([[w/2, h/2]])
+            # Aucun contour → on tombe au centre de l'image
+            input_point = np.array([[w / 2, h / 2]], dtype=np.float32)
 
     except Exception as e:
         print(f"Error calculating prompt point: {e}. Fallback to center.")
-        input_point = np.array([[w/2, h/2]])
+        input_point = np.array([[w / 2, h / 2]], dtype=np.float32)
 
-    input_label = np.array([1]) # 1 is foreground
 
     # SAM2 prediction
     try:
         masks, scores, logits = predictor.predict(
             point_coords=input_point,
             point_labels=input_label,
-            multimask_output=True
+            multimask_output=True,
         )
-        # Pick the mask with the highest score
-        best_idx = np.argmax(scores)
-        best_mask = masks[best_idx]
-        binary_mask = (best_mask * 255).astype(np.uint8)
-        return binary_mask
+
+        # Pick best mask
+        best_idx = int(np.argmax(scores))
+        best_mask = masks[best_idx]  # [H, W] bool
+
+        # Post-traitement du masque
+        refined = postprocess_body_mask(best_mask)
+        if refined is None:
+            print("[DEBUG] SAM2 mask looks bad, falling back to Otsu.")
+            return fallback_segmentation_otsu(image)
+
+        return refined
 
     except Exception as e:
         print(f"Error during SAM2 inference: {e}. Fallback to Otsu.")

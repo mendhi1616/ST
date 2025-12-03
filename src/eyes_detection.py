@@ -1,9 +1,12 @@
 import cv2
 import numpy as np
+import math
 import os
 import sys
 import argparse
 from typing import Tuple, Optional, List, Dict, Any
+
+
 
 try:
     from .utils import read_image_with_unicode
@@ -15,6 +18,36 @@ except ImportError:
     from segmentation_body import segment_tadpole_sam2
     from eyes_ilastik import detect_eyes_ilastik
     from orientation import classify_orientation
+
+
+def binarize_eye_prob(eye_prob: np.ndarray,
+                      debug_prefix: Optional[str] = None) -> np.ndarray:
+    """Convertit la carte de prob en masque binaire (0/255) avec Otsu + debug optionnel."""
+    eye_prob = np.asarray(eye_prob)
+
+    if eye_prob.dtype == np.uint8:
+        eye_prob_u8 = eye_prob
+    elif np.issubdtype(eye_prob.dtype, np.floating):
+        eye_prob_u8 = np.clip(eye_prob * 255.0, 0, 255).astype(np.uint8)
+    elif eye_prob.dtype == np.uint16:
+        eye_prob_u8 = (eye_prob / 257).astype(np.uint8)  # 65535/255 ≈ 257
+    else:
+        min_v, max_v = float(eye_prob.min()), float(eye_prob.max())
+        if max_v > min_v:
+            eye_prob_u8 = ((eye_prob - min_v) * 255.0 / (max_v - min_v)).astype(np.uint8)
+        else:
+            eye_prob_u8 = np.zeros_like(eye_prob, dtype=np.uint8)
+
+    # seuillage d’Otsu
+    _, eye_mask = cv2.threshold(
+        eye_prob_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
+
+    if debug_prefix is not None:
+        cv2.imwrite(f"{debug_prefix}_eye_prob_u8.png", eye_prob_u8)
+        cv2.imwrite(f"{debug_prefix}_eye_mask.png", eye_mask)
+
+    return eye_mask
 
 def analyze_tadpole_microscope(
     image_path: str,

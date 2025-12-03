@@ -4,11 +4,43 @@ import numpy as np
 import cv2
 import tempfile
 import uuid
+import tifffile
 from typing import Optional
+
+
+def binarize_eye_prob(eye_prob: np.ndarray,
+                      debug_prefix: Optional[str] = None) -> np.ndarray:
+    """Convertit la carte de prob en masque binaire (0/255) avec Otsu + debug optionnel."""
+    eye_prob = np.asarray(eye_prob)
+
+    if eye_prob.dtype == np.uint8:
+        eye_prob_u8 = eye_prob
+    elif np.issubdtype(eye_prob.dtype, np.floating):
+        eye_prob_u8 = np.clip(eye_prob * 255.0, 0, 255).astype(np.uint8)
+    elif eye_prob.dtype == np.uint16:
+        eye_prob_u8 = (eye_prob / 257).astype(np.uint8)  # 65535/255 ≈ 257
+    else:
+        min_v, max_v = float(eye_prob.min()), float(eye_prob.max())
+        if max_v > min_v:
+            eye_prob_u8 = ((eye_prob - min_v) * 255.0 / (max_v - min_v)).astype(np.uint8)
+        else:
+            eye_prob_u8 = np.zeros_like(eye_prob, dtype=np.uint8)
+
+    # seuil d’Otsu
+    _, eye_mask = cv2.threshold(
+        eye_prob_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
+
+    if debug_prefix is not None:
+        cv2.imwrite(f"{debug_prefix}_eye_prob_u8.png", eye_prob_u8)
+        cv2.imwrite(f"{debug_prefix}_eye_mask.png", eye_mask)
+    return eye_mask
+
 
 # Default fallback values
 DEFAULT_ILASTIK_BINARY = os.getenv("ILASTIK_PATH", "ilastik")
 DEFAULT_ILASTIK_PROJECT = os.getenv("ILASTIK_PROJECT", "eyes.ilp")
+
 
 def run_ilastik_headless(
     image: np.ndarray,
@@ -44,19 +76,35 @@ def run_ilastik_headless(
         input_path
     ]
 
-    print(f"Running Ilastik: {' '.join(cmd)}")
+    print(">>> Running Ilastik headless...")
+    print(">>> Command:", " ".join(cmd))
 
     try:
-        # Check if project file exists (better error message)
         if not os.path.exists(project):
             print(f"Warning: Ilastik project file not found at {project}")
-            # We proceed anyway, maybe it's a relative path that works for the binary context,
-            # but usually it's good to warn.
 
-        # Run subprocess
-        # Using check_call will raise CalledProcessError if return code != 0
-        # If binary is not found, it raises FileNotFoundError (WinError 2)
-        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # On NE cache PLUS stdout/stderr pour voir les erreurs
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        print(">>> Ilastik return code:", result.returncode)
+        if result.stdout:
+            print(">>> Ilastik STDOUT:")
+            print(result.stdout)
+        if result.stderr:
+            print(">>> Ilastik STDERR:")
+            print(result.stderr)
+
+        if result.returncode != 0:
+            print("Error: Ilastik returned non-zero exit code.")
+            # clean input, garder éventuellement le output pour debug
+            if os.path.exists(input_path):
+                os.remove(input_path)
+            return None
 
     except FileNotFoundError:
         print(f"Error: Ilastik binary not found at '{binary}'. Please check the configuration.")
@@ -66,7 +114,6 @@ def run_ilastik_headless(
 
     except Exception as e:
         print(f"Error running Ilastik: {e}")
-        # Clean up
         if os.path.exists(input_path):
             os.remove(input_path)
         return None
@@ -76,18 +123,19 @@ def run_ilastik_headless(
         print(f"Ilastik output file not found: {output_path}")
         if os.path.exists(input_path):
             os.remove(input_path)
+        # NE PAS return prob_map ici, on renvoie None
         return None
 
-    # Read TIFF. cv2.imread might handle multi-page tiff or multi-channel
-    prob_map = cv2.imread(output_path, cv2.IMREAD_UNCHANGED)
+    prob_map = tifffile.imread(output_path)
 
-    # Clean up
+    # Clean up input (tu peux commenter la suppression de output si tu veux analyser le tiff à la main)
     if os.path.exists(input_path):
         os.remove(input_path)
-    if os.path.exists(output_path):
-        os.remove(output_path)
+    # if os.path.exists(output_path):
+    #     os.remove(output_path)
 
     return prob_map
+
 
 def detect_eyes_ilastik(
     image: np.ndarray,
@@ -108,60 +156,79 @@ def detect_eyes_ilastik(
     if prob_map is None:
         return None, None, 0.0, "Ilastik failed or binary not found"
 
-    # prob_map shape: (H, W, Classes)
-    # We assume we need the "eye" class.
-    # If the user trained 2 classes (Background, Eye), usually channel 1 is Eye.
-
+# --- 1) choisir le canal des yeux : canal 1 ---
     if prob_map.ndim == 3:
-        eye_prob = prob_map[:, :, 1] # Assumption: Channel 1 is Eye
+        h, w, c = prob_map.shape
+        print(f"[DEBUG] prob_map shape: {prob_map.shape}")
+        if c >= 2:
+            bg_prob  = prob_map[..., 0]
+            eye_prob = prob_map[..., 1]
+            print(f"[DEBUG] Using channel 1 as eye probability map.")
+            print(f"[DEBUG] bg_prob min/max: {bg_prob.min()} / {bg_prob.max()}")
+            print(f"[DEBUG] eye_prob min/max: {eye_prob.min()} / {eye_prob.max()}")
+        else:
+            # sécurité si jamais il n’y a qu’un canal
+            eye_prob = prob_map[..., 0]
+            print(f"[DEBUG] WARNING: only {c} channel(s), using channel 0 as fallback.")
     else:
         eye_prob = prob_map
 
-    # Normalize to 0-255 if it's float
-    if eye_prob.dtype != np.uint8:
-        eye_prob_u8 = (eye_prob * 255).astype(np.uint8)
-    else:
+    # --- 2) normalisation en uint8 (on garde ta logique) ---
+    # --- 2) normalisation en uint8 ---
+    if eye_prob.dtype == np.uint8:
         eye_prob_u8 = eye_prob
+    elif np.issubdtype(eye_prob.dtype, np.floating):
+        eye_prob_u8 = np.clip(eye_prob * 255.0, 0, 255).astype(np.uint8)
+    elif eye_prob.dtype == np.uint16:
+        eye_prob_u8 = (eye_prob / 257).astype(np.uint8)
+    else:
+        min_v, max_v = float(eye_prob.min()), float(eye_prob.max())
+        if max_v > min_v:
+            eye_prob_u8 = ((eye_prob - min_v) * 255.0 / (max_v - min_v)).astype(np.uint8)
+        else:
+            eye_prob_u8 = np.zeros_like(eye_prob, dtype=np.uint8)
 
-    # 2. Mask with body mask
+    # 2. Optionnel : masque du corps (pour l’instant tu voulais toute l’image)
     if body_mask.shape[:2] != eye_prob_u8.shape[:2]:
         body_mask = cv2.resize(body_mask, (eye_prob_u8.shape[1], eye_prob_u8.shape[0]))
 
-    masked_prob = cv2.bitwise_and(eye_prob_u8, eye_prob_u8, mask=body_mask)
+    # si tu veux ignorer le corps : on garde eye_prob_u8
+    masked_prob = eye_prob_u8
+    # si plus tard tu veux utiliser le corps :
+    # masked_prob = cv2.bitwise_and(eye_prob_u8, eye_prob_u8, mask=body_mask)
 
-    # 3. Threshold
-    _, thresh = cv2.threshold(masked_prob, 127, 255, cv2.THRESH_BINARY)
+    # 3. Binarisation
+    debug_prefix = None  # ou "debug_eyes" si tu veux les PNG
+    eye_mask = binarize_eye_prob(masked_prob, debug_prefix=debug_prefix)
 
-    # 4. Find connected components
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(thresh, connectivity=8)
+    # 4. Composantes connexes
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        eye_mask, connectivity=8
+    )
 
-    # stats: [x, y, width, height, area]
-    if num_labels < 3: # 0 is background, need at least 1 and 2
+    if num_labels < 3:  # 0 = fond, il faut au moins 2 objets
         return None, None, 0.0, "Eyes not detected (<2 components)"
 
-    # Create list of (area, centroid) excluding background
     components = []
     for i in range(1, num_labels):
         area = stats[i, cv2.CC_STAT_AREA]
         center = centroids[i]
         components.append((area, center))
 
-    # Sort by area descending
     components.sort(key=lambda x: x[0], reverse=True)
 
-    # Take top 2
     if len(components) < 2:
         return None, None, 0.0, "Eyes not detected (<2 valid components)"
 
-    c1 = components[0][1] # (x, y)
+    c1 = components[0][1]
     c2 = components[1][1]
 
     eye_center_1 = (int(c1[0]), int(c1[1]))
     eye_center_2 = (int(c2[0]), int(c2[1]))
 
-    # 5. Compute distance
     dx = eye_center_1[0] - eye_center_2[0]
     dy = eye_center_1[1] - eye_center_2[1]
-    distance_px = np.sqrt(dx*dx + dy*dy)
+    distance_px = float(np.sqrt(dx * dx + dy * dy))
 
-    return eye_center_1, eye_center_2, float(distance_px), "Success"
+    return eye_center_1, eye_center_2, distance_px, "Success"
+
