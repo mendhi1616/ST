@@ -108,3 +108,6 @@ streamlit.log
 temp_images/
 data/results/debug_MC120002.JPG
 /data/results
+src/test_result_segmentation.jpg
+models/eyes.ilp
+src/checkpoints/sam2_hiera_base_plus.pt
