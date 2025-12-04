@@ -166,10 +166,6 @@ def detect_eyes_ilastik(
             print(f"[DEBUG] Using channel 1 as eye probability map.")
             print(f"[DEBUG] bg_prob min/max: {bg_prob.min()} / {bg_prob.max()}")
             print(f"[DEBUG] eye_prob min/max: {eye_prob.min()} / {eye_prob.max()}")
-
-            if eye_prob.max() == 0:
-                print("⚠️ [WARNING] Eye probability map is empty (max=0). The model detected nothing.")
-                print("   -> Check if the image is too dark, or if the Ilastik project matches this data.")
         else:
             # sécurité si jamais il n’y a qu’un canal
             eye_prob = prob_map[..., 0]
