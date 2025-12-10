@@ -3,9 +3,9 @@ from typing import Dict, List, Tuple
 
 import pandas as pd
 
-from .eyes_detection import analyze_tadpole_microscope
-from .logs import log_error, log_parameters, log_status, setup_logger, timestamp_now
-from .utils import ensure_directory, list_images, write_machine_friendly_csv, write_metadata
+from eyes_detection import analyze_tadpole_microscope
+from logs import log_error, log_parameters, log_status, setup_logger, timestamp_now
+from utils import ensure_directory, list_images, write_machine_friendly_csv, write_metadata
 
 
 PipelineResult = Tuple[pd.DataFrame, Dict]
@@ -62,10 +62,10 @@ def run_tadpole_batch(
     for idx, image_path in enumerate(image_paths, start=1):
         log_status(logger, f"Processing {idx}/{len(image_paths)} - {image_path}")
         try:
-            _, body_px, eye_px, status, orientation = analyze_tadpole_microscope(image_path, debug=debug)
+            _, len_px_corps, eyes_px, snout_px, status, orientation = analyze_tadpole_microscope(image_path, debug=debug)
             if not status.lower().startswith("succès"):
                 error_count += 1
-            results.append(_build_row(image_path, body_px, eye_px, status, pixel_mm_ratio, tail_factor, orientation))
+            results.append(_build_row(image_path, body_px, eyes_px, snout_px, status, pixel_mm_ratio, tail_factor, orientation))
         except Exception as exc:  
             error_count += 1
             log_error(logger, f"Crash on {image_path}: {exc}")

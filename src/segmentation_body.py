@@ -62,21 +62,44 @@ def robust_segmentation_redness(image: np.ndarray) -> np.ndarray:
         
     return final_mask
 
-def postprocess_body_mask(mask: np.ndarray) -> np.ndarray:
-    if mask.ndim == 3: mask = mask.squeeze()
+def postprocess_body_mask(mask: np.ndarray, pre_mask: np.ndarray = None) -> np.ndarray:
+    # mask = sortie brute de SAM (0/1 ou 0/255)
+    if mask.ndim == 3:
+        mask = mask.squeeze()
     mask_u8 = (mask > 0).astype(np.uint8) * 255
-    
-    # Lissage fin
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask_clean = cv2.morphologyEx(mask_u8, cv2.MORPH_OPEN, kernel)
-    
+
+    # Si on a aussi la rougeur, on la prépare
+    if pre_mask is not None:
+        if pre_mask.ndim == 3:
+            pre_mask = pre_mask.squeeze()
+        pre_u8 = (pre_mask > 0).astype(np.uint8) * 255
+    else:
+        pre_u8 = None
+
+    # 1) Dilation pour "épaissir" un peu le masque SAM
+    kernel_big = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    mask_dil = cv2.dilate(mask_u8, kernel_big, iterations=1)
+
+    # 2) Si on a la rougeur : on coupe dans l’enveloppe rouge
+    if pre_u8 is not None:
+        combined = cv2.bitwise_and(mask_dil, pre_u8)
+    else:
+        combined = mask_dil
+
+    # 3) Petit nettoyage
+    kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask_clean = cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel_small)
+
+    # 4) On garde le plus gros blob
     cnts, _ = cv2.findContours(mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     final = np.zeros_like(mask_clean)
     if cnts:
-        # On garde le plus gros
         c = max(cnts, key=cv2.contourArea)
         cv2.drawContours(final, [c], -1, 255, -1)
+
     return final
+
+
 
 def segment_tadpole_sam2(image: np.ndarray, debug=False) -> np.ndarray:
     """
@@ -134,11 +157,12 @@ def segment_tadpole_sam2(image: np.ndarray, debug=False) -> np.ndarray:
         masks, scores, logits = predictor.predict(
             point_coords=input_point,
             point_labels=input_label,
-            box=box_prompt, # <--- C'est ça qui force SAM à prendre tout le têtard !
+            box=box_prompt,
             multimask_output=True,
         )
-        
-        return postprocess_body_mask(masks[np.argmax(scores)])
+
+        best_mask = masks[np.argmax(scores)]
+        return postprocess_body_mask(best_mask, pre_mask=pre_mask)
 
     except Exception as e:
         print(f"SAM2 Error: {e}. Fallback Redness.")

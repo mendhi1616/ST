@@ -235,7 +235,7 @@ def process_tadpole_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         # Now returns orientation as well
-        processed_img, len_px, eyes_px, msg, orientation = analyze_tadpole_microscope(
+        processed_img, len_px, eyes_px, snout_px, msg, orientation = analyze_tadpole_microscope(
             path,
             debug=False,
             ilastik_binary_path=params.get("ilastik_path"),
@@ -245,7 +245,9 @@ def process_tadpole_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         corps_mm = len_px * params["pixel_mm_ratio"]
         total_mm = corps_mm * params["facteur_queue"]
         eyes_mm = eyes_px * params["pixel_mm_ratio"]
+        snout_mm = snout_px * params["pixel_mm_ratio"]
         ratio = (eyes_mm / total_mm) if total_mm > 0 else 0.0
+        ratio_en = (snout_mm / total_mm) if total_mm > 0 else 0.0
 
         return {
             "Fécondation": stage_normalized,
@@ -256,6 +258,8 @@ def process_tadpole_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
             "Total_Estimé_mm": round(total_mm, 3),
             "Dist_Yeux_mm": round(eyes_mm, 3),
             "Rapport": round(ratio, 4),
+            "Dist_Nez_mm": round(snout_mm, 3),
+            "Rapport_EN": round(ratio_en, 4),
             "Statut": msg,
             "Orientation": orientation,
             "Chemin_Complet": path,
@@ -272,6 +276,8 @@ def process_tadpole_image(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
             "Total_Estimé_mm": 0.0,
             "Dist_Yeux_mm": 0.0,
             "Rapport": 0.0,
+            "Dist_Nez_mm": 0.0,
+            "Rapport_EN": 0.0,
             "Statut": f"Erreur: {str(e)}",
             "Orientation": "error",
             "Chemin_Complet": path,
@@ -369,29 +375,31 @@ def main():
 
         if params["mode_analyse"] == "Têtards (Morphométrie)":
             # --- FILTERING LOGIC ---
-            # Filter for profile_ok and valid eye distance
-            if "Orientation" in df_final.columns and "Dist_Yeux_mm" in df_final.columns:
-                df_clean = df_final[
-                    (df_final["Orientation"] == "profile_ok") &
-                    (df_final["Dist_Yeux_mm"] > 0)
-                ]
+            # On garde uniquement les images où la distance entre les yeux a été mesurée
+            if "Dist_Yeux_mm" in df_final.columns:
+                df_clean = df_final[df_final["Dist_Yeux_mm"] > 0].copy()
             else:
-                df_clean = df_final
+                df_clean = df_final.copy()
 
             # Show number of excluded samples
             n_total = len(df_final)
             n_kept = len(df_clean)
             if n_total > n_kept:
-                st.warning(f"Exclusion des données invalides : {n_total - n_kept} images ignorées (Orientation non 'profile_ok' ou Yeux non détectés).")
+                st.warning(
+                    f"Exclusion des données invalides : {n_total - n_kept} images ignorées "
+                    f"(yeux non détectés ou distance yeux = 0)."
+                )
 
+            # Groupement (si colonnes présentes)
             if all(col in df_clean.columns for col in ["Fécondation", "Condition", "Réplicat"]):
                 numeric_cols = df_clean.select_dtypes(include="number").columns
-
                 df_clean_grouped = (
                     df_clean
                     .groupby(["Fécondation", "Condition", "Réplicat"], as_index=False)[numeric_cols]
                     .mean()
                 )
+
+
 
                     
             if not df_clean.empty and "Condition" in df_clean.columns and "Rapport" in df_clean.columns:

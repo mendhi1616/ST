@@ -1,53 +1,16 @@
 import cv2
 import numpy as np
+import math
 import os
 import sys
 import argparse
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict, Any
 
-# --- GESTION ROBUSTE DES IMPORTS ---
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.append(current_dir)
+from utils import read_image_with_unicode
+from segmentation_body import segment_tadpole_sam2
+from eyes_ilastik import detect_eyes_ilastik
+from orientation import classify_orientation
 
-try:
-    from utils import read_image_with_unicode
-    from segmentation_body import segment_tadpole_sam2
-    from eyes_ilastik import detect_eyes_ilastik
-except ImportError as e:
-    print(f"❌ Erreur critique d'importation : {e}")
-    sys.exit(1)
-
-# --- CONFIGURATION ---
-DEFAULT_ILASTIK_PATH = r"C:\Program Files\ilastik-1.4.1.post1-gpu\ilastik.exe"
-DEFAULT_PROJECT_NAME = "eyes.ilp"
-
-def find_ilastik_project():
-    """Cherche le fichier .ilp intelligemment."""
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    candidates = [
-        os.path.join(base_dir, "models", DEFAULT_PROJECT_NAME),
-        os.path.join(base_dir, DEFAULT_PROJECT_NAME),
-        os.path.join(current_dir, DEFAULT_PROJECT_NAME),
-        "eyes.ilp"
-    ]
-    for p in candidates:
-        if os.path.exists(p): return p
-    return None
-
-def draw_scientific_arrow(img, pt1, pt2, color, text="", thickness=2):
-    """Dessine une flèche de mesure technique."""
-    pt1 = (int(pt1[0]), int(pt1[1]))
-    pt2 = (int(pt2[0]), int(pt2[1]))
-    cv2.line(img, pt1, pt2, color, thickness)
-    cv2.arrowedLine(img, pt1, pt2, color, thickness, tipLength=0.05)
-    cv2.arrowedLine(img, pt2, pt1, color, thickness, tipLength=0.05)
-    if text:
-        mid_x = (pt1[0] + pt2[0]) // 2
-        mid_y = (pt1[1] + pt2[1]) // 2
-        (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-        cv2.rectangle(img, (mid_x - 2, mid_y - h - 5), (mid_x + w + 2, mid_y + 5), (0, 0, 0), -1)
-        cv2.putText(img, text, (mid_x, mid_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
 def analyze_tadpole_microscope(
     image_path: str,
@@ -55,165 +18,266 @@ def analyze_tadpole_microscope(
     output_dir: Optional[str] = None,
     ilastik_binary_path: Optional[str] = None,
     ilastik_project_path: Optional[str] = None,
-) -> Tuple[Optional[np.ndarray], float, float, float, str, str]:
-    
-    # 0. CONFIGURATION
-    if not ilastik_binary_path: ilastik_binary_path = DEFAULT_ILASTIK_PATH
-    if not ilastik_project_path: ilastik_project_path = find_ilastik_project()
+) -> Tuple[Optional[np.ndarray], float, float, str, str]:
+    """
+    Analyzes a tadpole image using SAM2 for body segmentation, Ilastik for eye detection,
+    and a CNN for orientation classification.
 
+    Returns: (annotated_image, body_length_px, eye_distance_px, status, orientation)
+    """
+
+    # ------------------------------------------------------------------
+    # 0) Read Image
+    # ------------------------------------------------------------------
     if not os.path.exists(image_path):
-        return None, 0.0, 0.0, 0.0, "File not found", "unknown"
+        return None, 0.0, 0.0, "File not found", "unknown"
 
     img = read_image_with_unicode(image_path)
     if img is None:
-        return None, 0.0, 0.0, 0.0, "Image unreadable", "unknown"
+        return None, 0.0, 0.0, "Image unreadable", "unknown"
 
     output_img = img.copy()
-    if debug and output_dir: os.makedirs(output_dir, exist_ok=True)
+
+    if debug:
+        if output_dir is None:
+            output_dir = "debug_output"
+        os.makedirs(output_dir, exist_ok=True)
 
     # ------------------------------------------------------------------
-    # 1. SEGMENTATION CORPS (SAM2)
+    # 1) SEGMENTATION DU CORPS (SAM2)
     # ------------------------------------------------------------------
-    body_length_px = 0.0
-    box_points = None
-    
-    try:
-        if segment_tadpole_sam2:
-            mask_body = segment_tadpole_sam2(img)
-        else:
-            raise ImportError("SAM2 module missing")
-        
-        if cv2.countNonZero(mask_body) == 0:
-            return output_img, 0.0, 0.0, 0.0, "Body not detected", "unknown"
-            
-        cnts, _ = cv2.findContours(mask_body, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if cnts:
-            c_max = max(cnts, key=cv2.contourArea)
-            hull = cv2.convexHull(c_max)
-            cv2.drawContours(output_img, [hull], -1, (0, 255, 0), 2) # CORPS EN VERT
-            
-            # Mesure Longueur
-            rect = cv2.minAreaRect(hull) 
-            box = cv2.boxPoints(rect)
-            box_points = np.int32(box)
-            body_length_px = float(max(rect[1]))
-            
-            # Flèche Longueur (Cyan)
-            d1 = np.linalg.norm(box_points[0]-box_points[1])
-            d2 = np.linalg.norm(box_points[1]-box_points[2])
-            
-            if d1 > d2: p_s, p_e = box_points[0], box_points[1]
-            else:       p_s, p_e = box_points[1], box_points[2]
-
-            draw_scientific_arrow(output_img, p_s, p_e, (255, 255, 0), f"L={int(body_length_px)}")
-        
-    except Exception as e:
-        print(f"SAM2 Error: {e}")
-        return output_img, 0.0, 0.0, 0.0, f"SAM2 Crash: {e}", "unknown"
-
-    # ------------------------------------------------------------------
-    # 2. DÉTECTION YEUX (ILASTIK)
-    # ------------------------------------------------------------------
-    snout_dist_px = 0.0
-    eye_dist_px = 0.0
-    num_eyes = 0
-    eye1, eye2 = None, None
-    status_eyes = "Init"
-    
-    try:
-        eye1, eye2, eye_dist_px, status_eyes, num_eyes = detect_eyes_ilastik(
-            img, mask_body, ilastik_binary_path, ilastik_project_path
-        )
-    except Exception as e:
-        # Fallback compatibilité
-        try:
-            eye1, eye2, eye_dist_px, status_eyes = detect_eyes_ilastik(
-                img, mask_body, ilastik_binary_path, ilastik_project_path
-            )
-            num_eyes = 2 if eye_dist_px > 0 else 0
-        except:
-            num_eyes = 0
-            status_eyes = "Error"
-
-    # ------------------------------------------------------------------
-    # 3. ANALYSE ET DESSIN FINAL
-    # ------------------------------------------------------------------
-    if num_eyes >= 2 and eye_dist_px > 0 and box_points is not None:
-        orientation = "dorsal"
-        status_final = "Success"
-        
-        # A. DESSIN YEUX (Rouge)
-        mid_eyes = ((eye1[0] + eye2[0]) / 2, (eye1[1] + eye2[1]) / 2)
-        cv2.circle(output_img, eye1, 5, (0, 0, 255), -1)
-        cv2.circle(output_img, eye2, 5, (0, 0, 255), -1)
-        cv2.line(output_img, eye1, eye2, (0, 0, 255), 1)
-        draw_scientific_arrow(output_img, eye1, eye2, (0, 0, 255), f"Yeux={int(eye_dist_px)}")
-        
-        # B. DESSIN NEZ (Plaquode) - ROSE/MAGENTA (pour visibilité)
-        d01 = np.linalg.norm(box_points[0]-box_points[1])
-        d12 = np.linalg.norm(box_points[1]-box_points[2])
-        
-        # On cherche les milieux des petits côtés (largeurs)
-        if d01 < d12:
-            end1 = (box_points[0] + box_points[1]) / 2
-            end2 = (box_points[2] + box_points[3]) / 2
-        else:
-            end1 = (box_points[1] + box_points[2]) / 2
-            end2 = (box_points[3] + box_points[0]) / 2
-            
-        dist1 = np.linalg.norm(np.array(mid_eyes) - np.array(end1))
-        dist2 = np.linalg.norm(np.array(mid_eyes) - np.array(end2))
-        
-        if dist1 < dist2:
-            snout_pt = end1
-            snout_dist_px = dist1
-        else:
-            snout_pt = end2
-            snout_dist_px = dist2
-            
-        # DESSIN EN ROSE (255, 0, 255)
-        draw_scientific_arrow(output_img, mid_eyes, snout_pt, (255, 0, 255), f"Nez={int(snout_dist_px)}")
-
-    elif num_eyes == 1:
-        orientation = "profile"
-        status_final = "Profile View (1 eye)"
-    else:
-        orientation = "ventral"
-        status_final = f"Ventral/Error ({num_eyes} eyes)"
-
-    cv2.putText(output_img, f"View: {orientation.upper()}", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
+    mask_body = segment_tadpole_sam2(img)
 
     if debug and output_dir:
-        cv2.imwrite(os.path.join(output_dir, "final_output.jpg"), output_img)
+        cv2.imwrite(os.path.join(output_dir, "mask_body_sam2.png"), mask_body)
 
-    return output_img, body_length_px, eye_dist_px, snout_dist_px, status_final, orientation
+    # Check if mask is empty
+    if cv2.countNonZero(mask_body) == 0:
+        return output_img, 0.0, 0.0, "Body not detected (SAM2 failed)", "unknown"
+
+    # Find contours to get hull and bounding rect
+    cnts, _ = cv2.findContours(mask_body, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return output_img, 0.0, 0.0, "No contours in mask", "unknown"
+
+    cnt = max(cnts, key=cv2.contourArea)
+    hull = cv2.convexHull(cnt)
+
+    cv2.drawContours(output_img, [hull], -1, (0, 255, 0), 2)
+
+    # ------------------------------------------------------------------
+    # 1.5) ORIENTATION CLASSIFICATION
+    # ------------------------------------------------------------------
+    # Crop the image to the bounding box of the body for classification
+    x, y, w, h = cv2.boundingRect(mask_body)
+    # Add some padding
+    pad = int(0.1 * max(w, h))
+    x0 = max(0, x - pad)
+    y0 = max(0, y - pad)
+    x1 = min(img.shape[1], x + w + pad)
+    y1 = min(img.shape[0], y + h + pad)
+
+    cropped_body = img[y0:y1, x0:x1]
+
+    orientation, orientation_conf = classify_orientation(cropped_body)
+
+    cv2.putText(
+        output_img,
+        f"Ori: {orientation} ({orientation_conf:.2f})",
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.0,
+        (0, 0, 255),
+        2
+    )
+
+    # ------------------------------------------------------------------
+    # 2) BODY LENGTH: minAreaRect
+    # ------------------------------------------------------------------
+    rect = cv2.minAreaRect(hull)   # ((cx,cy), (w,h), angle)
+    box = cv2.boxPoints(rect)
+    box = np.int32(box)
+
+    cv2.drawContours(output_img, [box], 0, (0, 255, 255), 2)
+
+    (cx_rect, cy_rect), (w_rect, h_rect), angle = rect
+    body_length_px = float(max(w_rect, h_rect))
+
+    # Draw length arrow
+    # Identify the two furthest points in the box to draw the arrow
+    max_d = 0.0
+    p1, p2 = box[0], box[1]
+    for i in range(4):
+        for j in range(i + 1, 4):
+            d = float(np.linalg.norm(box[i] - box[j]))
+            if d > max_d:
+                max_d = d
+                p1, p2 = box[i], box[j]
+
+    cv2.arrowedLine(output_img, tuple(p1), tuple(p2), (0, 255, 255), 2, tipLength=0.03)
+    cv2.putText(
+        output_img,
+        f"L={int(body_length_px)}",
+        (min(p1[0], p2[0]), min(p1[1], p2[1]) - 10),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (0, 255, 255),
+        2,
+    )
+
+    # ------------------------------------------------------------------
+    # 3) EYE DETECTION (Ilastik)
+    # ------------------------------------------------------------------
+    # valeurs par défaut (au cas où on ne trouve pas 2 yeux)
+    eye1 = None
+    eye2 = None
+    eye_dist_px = 0.0
+    snout_dist_px = 0.0
+    status_eyes = "Not computed"
+
+    # >>> PAS de condition sur l’orientation ici <<<
+    eye1, eye2, eye_dist_px, status_eyes = detect_eyes_ilastik(
+        img,
+        mask_body,
+        ilastik_binary_path=ilastik_binary_path,
+        ilastik_project_path=ilastik_project_path,
+    )
+
+    MIN_EYE_DIST_FRAC = 0.15  # 15% de la longueur du corps
+    min_eye_dist_px = MIN_EYE_DIST_FRAC * body_length_px
+
+    if eye1 is not None and eye2 is not None and eye_dist_px < min_eye_dist_px:
+        status_eyes = f"Rejected_too_close_{eye_dist_px:.1f}px"
+        eye1 = None
+        eye2 = None
+        eye_dist_px = 0.0
+
+
+    # On ne trace D et EN QUE si on a bien 2 yeux
+    if eye1 is not None and eye2 is not None and status_eyes == "Success":
+        # --- dessin des yeux + D ---
+        cv2.circle(output_img, eye1, 5, (255, 255, 0), -1)
+        cv2.circle(output_img, eye2, 5, (255, 255, 0), -1)
+        cv2.line(output_img, eye1, eye2, (255, 255, 255), 2)
+
+        eye_mid = (
+            int((eye1[0] + eye2[0]) / 2),
+            int((eye1[1] + eye2[1]) / 2),
+        )
+        eye_mid_np = np.array(eye_mid, dtype=np.float32)
+
+        cv2.putText(
+            output_img,
+            f"D={int(eye_dist_px)}",
+            (eye_mid[0], eye_mid[1] - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
+        )
+
+        # --- calcul de EN : perpendiculaire, côté le plus court ---
+        eye_vec = np.array(eye2, dtype=np.float32) - np.array(eye1, dtype=np.float32)
+        if np.linalg.norm(eye_vec) > 1e-6:
+            eye_vec = eye_vec / np.linalg.norm(eye_vec)
+            perp = np.array([-eye_vec[1], eye_vec[0]], dtype=np.float32)
+
+            h, w = mask_body.shape[:2]
+            max_step = int(np.hypot(h, w))
+
+            def raycast(dir_vec):
+                last_valid = None
+                for s in range(1, max_step):
+                    x = int(round(eye_mid[0] + dir_vec[0] * s))
+                    y = int(round(eye_mid[1] + dir_vec[1] * s))
+
+                    if x < 0 or x >= w or y < 0 or y >= h:
+                        break
+                    if mask_body[y, x] > 0:
+                        last_valid = (x, y)
+                    else:
+                        break
+                if last_valid is None:
+                    return None, 0.0
+                dist = float(
+                    np.linalg.norm(
+                        np.array(last_valid, dtype=np.float32) - eye_mid_np
+                    )
+                )
+                return last_valid, dist
+
+            p1, d1 = raycast(perp)
+            p2, d2 = raycast(-perp)
+
+            candidates = []
+            if p1 is not None and d1 > 0:
+                candidates.append((p1, d1))
+            if p2 is not None and d2 > 0:
+                candidates.append((p2, d2))
+
+            if candidates:
+                snout_point, snout_dist_px = min(candidates, key=lambda x: x[1])
+
+                cv2.circle(output_img, snout_point, 5, (0, 0, 255), -1)
+                cv2.line(output_img, eye_mid, snout_point, (255, 255, 255), 2)
+
+                label_pos = (
+                    int((eye_mid[0] + snout_point[0]) / 2),
+                    int((eye_mid[1] + snout_point[1]) / 2) - 10,
+                )
+                cv2.putText(
+                    output_img,
+                    f"EN={int(snout_dist_px)}",
+                    label_pos,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 255),
+                    2,
+                )
+
+
+
+    if debug and output_dir:
+        cv2.imwrite(os.path.join(output_dir, "final_output.png"), output_img)
+
+    return output_img, body_length_px, eye_dist_px, snout_dist_px, status_eyes, orientation
+
+
 
 if __name__ == "__main__":
-    # ... (Code test inchangé) ...
-    parser = argparse.ArgumentParser()
-    parser.add_argument("image", nargs='?')
-    parser.add_argument("--ilastik-path")
-    parser.add_argument("--ilastik-project")
+    parser = argparse.ArgumentParser(description="Test eyes detection on a single image.")
+    parser.add_argument("image_path", nargs='?', help="Path to the input image")
+    parser.add_argument("--ilastik-path", help="Path to Ilastik binary")
+    parser.add_argument("--ilastik-project", help="Path to Ilastik project file")
     args = parser.parse_args()
-    
-    target = args.image
-    if not target:
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        d = os.path.join(base, "data", "training")
-        if os.path.exists(d): 
-            f_list = [f for f in os.listdir(d) if f.lower().endswith(('.jpg', '.png'))]
-            if f_list: target = os.path.join(d, f_list[0])
-            
-    if target:
-        print(f"Analyzing {target}...")
-        res, l, e, n, s, o = analyze_tadpole_microscope(
-            target, debug=True, output_dir="debug_test",
-            ilastik_binary_path=args.ilastik_path, ilastik_project_path=args.ilastik_project
-        )
-        if res is not None:
-            cv2.imwrite("test_final.jpg", res)
-            print(f"✅ Saved test_final.jpg")
-            print(f"📊 Length: {l:.1f} | Eyes: {e:.1f} | Snout: {n:.1f} | Ori: {o} | Status: {s}")
+
+    # Default path for quick testing if no arg provided
+    target_path = args.image_path
+    if not target_path:
+        # Try to find a default file or prompt
+        print("No image path provided. Please provide a path as an argument.")
+        sys.exit(1)
+
+    print(f"Analyzing {target_path}...")
+
+    annotated, length, eyes, snout, status, ori = analyze_tadpole_microscope(
+        target_path,
+        debug=True,
+        output_dir="debug_test",
+        ilastik_binary_path=args.ilastik_path,
+        ilastik_project_path=args.ilastik_project
+    )
+
+    if annotated is not None:
+        output_path = "test_result_segmentation.jpg"
+        cv2.imwrite(output_path, annotated)
+        print(f"\n✅ Result saved to: {os.path.abspath(output_path)}")
+        print(f"Debug images saved to: {os.path.abspath('debug_test')}")
+        print(f"📊 Metrics:")
+        print(f"   - Body Length: {length} px")
+        print(f"   - Eye Distance: {eyes} px")
+        print(f"   - Orientation: {ori}")
+        print(f"   - Status: {status}")
     else:
-        print("❌ No image found")
+        print("❌ Analysis failed to produce an image.")
+        print(f"   - Status: {status}")
